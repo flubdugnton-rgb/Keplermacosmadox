@@ -25,20 +25,16 @@ Se você recebeu os fontes em ZIP, há duas maneiras de enviar ao repositório:
 
 ### Login Google e assinatura Apple
 
-Sem certificado configurado, o workflow gera um **build de teste com assinatura ad hoc**, sem notarização. Esse pacote permite conferir a compilação e a abertura; **o login Google não deve ser considerado funcional nesse build**. O SDK exige assinatura emitida pela Apple e permissão de acesso ao Chaves para guardar a sessão no macOS.
+O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. Uma atualização de um pacote com assinatura ad hoc pode pedir novamente autorização de acesso ao Chaves.
 
-Para gerar o pacote com assinatura Developer ID Application, configure estes **Secrets** do repositório:
+Sem certificado configurado, o workflow gera um **build de teste com assinatura ad hoc**, sem notarização. Para distribuição com assinatura Developer ID Application, configure estes **Secrets** do repositório:
 
 | Secret | Conteúdo |
 | --- | --- |
 | `MACOS_CERTIFICATE_P12_BASE64` | Certificado Developer ID Application e chave privada exportados como P12 e codificados em base64 |
 | `MACOS_CERTIFICATE_PASSWORD` | Senha do arquivo P12 |
-| `MACOS_PROVISION_PROFILE_BASE64` | Perfil de distribuição Developer ID para o bundle ID macOS, autorizando o grupo do Chaves, codificado em base64 |
-| `APPLE_TEAM_ID` | Identificador da equipe Apple Developer |
 
-Para também notarizar o app, configure `APPLE_ID` e `APPLE_APP_SPECIFIC_PASSWORD`. Não envie certificados, senhas ou chaves para os arquivos do repositório. O workflow importa o certificado em um chaveiro temporário, assina o aplicativo e remove o chaveiro ao finalizar.
-
-O grupo principal do Chaves deve ser `$(AppIdentifierPrefix)$(CFBundleIdentifier)`. O workflow incorpora o perfil e deriva o prefixo dele, validando equipe, bundle ID, grupo autorizado e validade antes de assinar.
+Para também notarizar o app, configure `APPLE_TEAM_ID`, `APPLE_ID` e `APPLE_APP_SPECIFIC_PASSWORD`. Não envie certificados, senhas ou chaves para os arquivos do repositório. O workflow importa o certificado em um chaveiro temporário, assina o aplicativo e remove o chaveiro ao finalizar.
 
 ### Cliente OAuth
 
@@ -49,7 +45,7 @@ O grupo principal do Chaves deve ser `$(AppIdentifierPrefix)$(CFBundleIdentifier
 
 No Google Cloud, confirme que o client ID reservado é do tipo **iOS**, como exige o SDK nativo também no macOS, e está registrado para o bundle ID acima. Não há client secret no aplicativo. O consentimento deve permitir `drive.readonly`, `drive.file` e `drive.appdata`, com a mesma conta usada no Android/iPhone.
 
-Referências oficiais: [configuração Google Sign-In para iOS/macOS](https://developers.google.com/identity/sign-in/ios/start-integrating) e [armazenamento de credenciais macOS no GTMAppAuth](https://github.com/google/GTMAppAuth#macos-keychain-storage).
+Referências oficiais: [OAuth para aplicativos nativos](https://developers.google.com/identity/protocols/oauth2/native-app), [AppAuth](https://github.com/openid/AppAuth-iOS) e [armazenamento macOS no GTMAppAuth](https://github.com/google/GTMAppAuth#macos-keychain-storage).
 
 ## Compilar localmente
 
@@ -59,7 +55,7 @@ Instale Xcode com SDK macOS 26 e XcodeGen (`brew install xcodegen`). Execute:
 bash scripts/build_macos.sh
 ```
 
-O projeto Xcode é gerado a partir de `project.yml`. Para assinar localmente, defina `MACOS_SIGN_IDENTITY` com o nome do certificado Developer ID Application no Chaves, `APPLE_TEAM_ID` e `MACOS_PROVISION_PROFILE` com o caminho do perfil. Os pacotes ficam em `dist/`.
+O projeto Xcode é gerado a partir de `project.yml`. Para assinar localmente, defina `MACOS_SIGN_IDENTITY` com o nome do certificado Developer ID Application no Chaves. Os pacotes ficam em `dist/`.
 
 ## Verificações
 
