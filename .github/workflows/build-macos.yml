@@ -23,7 +23,7 @@ jobs:
         run: |
           if [[ ! -f project.yml ]]; then
             test -f Keplerae-macOS-2.0-fontes.zip || { echo 'Envie os fontes ou Keplerae-macOS-2.0-fontes.zip para a raiz do repositório.'; exit 1; }
-            unzip -q Keplerae-macOS-2.0-fontes.zip
+            unzip -oq Keplerae-macOS-2.0-fontes.zip
           fi
       - name: Verificar Xcode e instalar XcodeGen
         run: |
