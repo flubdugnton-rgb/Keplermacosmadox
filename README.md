@@ -4,7 +4,9 @@ Aplicativo nativo para macOS 26 ou superior, com interface SwiftUI e Liquid Glas
 
 ## Recursos
 
-- Barra lateral para Início, Pomodoro, Questões, Notas e Perfil.
+- Barra lateral para Início, Pomodoro, Questões, Notas e Perfil. Início limpa a navegação de matérias, pastas e materiais abertos.
+- Cards animados com seis cores, 289,8 pontos de altura e os padrões 5×5 da referência Pattern Cards: círculos/contornos, partículas, interação com o cursor e brilho. Os cabeçalhos de matérias e pastas reutilizam o efeito em uma área separada do texto.
+- Seletor de tema apenas na barra lateral, desenhado em Canvas para não depender do material nativo durante a troca de aparência.
 - Catálogo original da versão 2.0: 1.022 materiais (703 aulas, 306 PDFs e 13 áudios).
 - Ordem de Português preservada; links de pastas do Drive resolvem o arquivo da aula pelo nome.
 - Reprodução com AVPlayer, leitor PDFKit com janela em tela cheia e cache local.
@@ -25,7 +27,7 @@ Se você recebeu os fontes em ZIP, há duas maneiras de enviar ao repositório:
 
 ### Login Google e assinatura Apple
 
-O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. Uma atualização de um pacote com assinatura ad hoc pode pedir novamente autorização de acesso ao Chaves.
+O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. O aplicativo não abre pedidos automáticos de senha do Chaves: consultas e gravações são não interativas e mantêm as ACLs existentes. Se uma atualização ad hoc não tiver acesso à credencial protegida por outra assinatura, será necessário entrar novamente no Google. Se o Chaves também impedir a gravação, a sessão funciona apenas até fechar o app e o Perfil informa essa condição. Para preservar a identidade entre atualizações, distribua builds assinadas com o mesmo certificado Developer ID.
 
 Sem certificado configurado, o workflow gera um **build de teste com assinatura ad hoc**, sem notarização. Para distribuição com assinatura Developer ID Application, configure estes **Secrets** do repositório:
 
@@ -39,9 +41,9 @@ Para também notarizar o app, configure `APPLE_TEAM_ID`, `APPLE_ID` e `APPLE_APP
 ### Cliente OAuth
 
 - Projeto Google compartilhado: `240965240632`.
-- Client ID público macOS: `240965240632-qd0sekmr9ukauuh7lnc2cmct75ja5grf.apps.googleusercontent.com`.
+- Client ID público macOS: `240965240632-g58uffmvvthdqa1mk513fd4k8m8jml2v.apps.googleusercontent.com`.
 - Bundle ID macOS: `com.aistudio.keplerae.stdy.macos`.
-- URL scheme: `com.googleusercontent.apps.240965240632-qd0sekmr9ukauuh7lnc2cmct75ja5grf`.
+- URL scheme: `com.googleusercontent.apps.240965240632-g58uffmvvthdqa1mk513fd4k8m8jml2v`.
 
 No Google Cloud, confirme que o client ID reservado é do tipo **iOS**, como exige o SDK nativo também no macOS, e está registrado para o bundle ID acima. Não há client secret no aplicativo. O consentimento deve permitir `drive.readonly`, `drive.file` e `drive.appdata`, com a mesma conta usada no Android/iPhone.
 
@@ -62,6 +64,14 @@ O projeto Xcode é gerado a partir de `project.yml`. Para assinar localmente, de
 `scripts/validate_macos.py` confere catálogo, recursos, ícones e configuração OAuth. `Tests/CloudStateTests.swift` testa migração de timestamps Android em segundos/milissegundos, valores padrão e ida e volta de notas, favoritos, aulas concluídas, questões, histórico Pomodoro e preferências.
 
 Abertura e compilação não substituem o teste com conta Google: após assinar, confirme login, recebimento dos dados já existentes e propagação de alterações entre Mac, Android e iPhone. A regra de resolução de conflitos é a mesma da 2.0: o snapshot com data mais recente prevalece; edições simultâneas em dispositivos diferentes não são mescladas por campo.
+
+## Parâmetros visuais
+
+A referência é [Pattern Cards, de Zsolt Kacso](https://experiments.thisiswhitespace.com/pattern-cards). O app usa um port nativo em SwiftUI/Canvas; não carrega scripts remotos nem incorpora uma WebView. Os 51 parâmetros solicitados ficam em `Resources/PatternCards.defaults.json`. A altura foi posteriormente reduzida em 30%, de 414 para 289,8, conforme solicitado. Os demais valores foram mantidos.
+
+`Prototype/PatternCards.useDialKit.ts` contém a chamada `useDialKit("Pattern Cards", ...)` com os mesmos defaults para uso no protótipo web. Esse arquivo é uma referência de configuração e não uma dependência do app macOS.
+
+Os testes cobrem a paridade dos defaults, a geometria dos três padrões, o crescimento e retorno dos círculos, os limites de partículas, a limpeza da navegação e a restauração do controle de interação do Chaves em caso de erro.
 
 ## Origem
 

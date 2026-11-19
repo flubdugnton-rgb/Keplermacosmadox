@@ -1,100 +1,78 @@
-diff --git a/Sources/Design/GlassThemeToggle.swift b/Sources/Design/GlassThemeToggle.swift
-index c62dea4..f1320ac 100644
---- a/Sources/Design/GlassThemeToggle.swift
-+++ b/Sources/Design/GlassThemeToggle.swift
-@@ -45,17 +45,25 @@ struct GlassThemeToggle: View {
-     private let trackH: CGFloat = 40
-     private let knob: CGFloat = 32
+diff --git a/Sources/Auth/GoogleAuthStore.swift b/Sources/Auth/GoogleAuthStore.swift
+--- a/Sources/Auth/GoogleAuthStore.swift
++++ b/Sources/Auth/GoogleAuthStore.swift
+@@ -3,6 +3,7 @@
+ import Foundation
+ import AppAuth
+ import GTMAppAuth
++import Security
  
--    /// posição do botão enquanto arrasta (nil = em repouso)
--    @State private var dragX: CGFloat?
-+    private struct DragState {
-+        let origin: CGFloat
-+        let translation: CGFloat
+ @MainActor
+ final class GoogleAuthStore: ObservableObject {
+@@ -12,11 +13,12 @@
+     @Published private(set) var photoURL = ""
+     @Published private(set) var isLoading = false
+     @Published var errorMessage: String?
++    @Published private(set) var credentialNotice: String?
+ 
+     // The traditional Mac keychain uses the creating app's ACL, without restricted entitlements.
+     private let credentialStore = GTMAppAuth.KeychainStore(
+         itemName: "com.aistudio.keplerae.stdy.macos.google-oauth",
+-        keychainAttributes: [.useFileBasedKeychain]
++        keychainHelper: NoninteractiveKeychainHelper(keychainAttributes: [.useFileBasedKeychain])
+     )
+     private var authState: OIDAuthState?
+     private var authorizationFlow: OIDExternalUserAgentSession?
+@@ -56,6 +58,7 @@
+         email = ""
+         photoURL = ""
+         errorMessage = nil
++        credentialNotice = nil
+         do {
+             try credentialStore.removeAuthSession()
+         } catch {
+@@ -238,7 +241,9 @@
+             }
+         } catch {
+             guard sessionVersion == version else { return }
+-            if !Self.isMissingCredential(error) {
++            if Self.requiresKeychainAuthorization(error) {
++                errorMessage = "A assinatura desta atualização não tem acesso automático à sessão salva. Entre no Google novamente. Uma versão assinada com o mesmo certificado preserva esse acesso entre atualizações."
++            } else if !Self.isMissingCredential(error) {
+                 errorMessage = GoogleDriveAuthError.keychainUnavailable.localizedDescription
+             }
+         }
+@@ -253,7 +258,12 @@
+                 userEmail: profile.email,
+                 userEmailIsVerified: profile.emailVerified == true ? "true" : "false"
+             ))
+-        } catch {
++            credentialNotice = nil
++        } catch {
++            if Self.requiresKeychainAuthorization(error) {
++                credentialNotice = "A sessão está ativa apenas até fechar o aplicativo: o Chaves não autorizou esta assinatura a atualizar a sessão salva."
++                return
++            }
+             throw GoogleDriveAuthError.keychainUnavailable
+         }
+     }
+@@ -299,6 +309,12 @@
+         default:
+             return false
+         }
 +    }
 +
-+    // O estado do gesto também é limpo quando o arraste é cancelado.
-+    @GestureState private var dragState: DragState?
- 
-     private var pad: CGFloat { (trackH - knob) / 2 }
-     private var travel: CGFloat { trackW - knob - pad * 2 }
-     private var restingX: CGFloat { isDark ? travel : 0 }
--    private var knobX: CGFloat { dragX ?? restingX }
--    private var darkness: Double { Double(knobX / travel) }
-+    private var knobX: CGFloat {
-+        guard let dragState else { return restingX }
-+        return min(max(dragState.origin + dragState.translation, 0), travel)
-+    }
-+    private var darkness: Double { min(max(Double(knobX / travel), 0), 1) }
- 
-     var body: some View {
--        let night = dragX == nil ? isDark : darkness > 0.5
-+        let night = dragState == nil ? isDark : darkness > 0.5
- 
-         ZStack(alignment: .leading) {
-             // céu: dia -> noite acompanha o botão
-@@ -63,12 +71,14 @@ struct GlassThemeToggle: View {
-                 .fill(Color(red: 0.55, green: 0.78, blue: 1.0).opacity(0.30 * (1 - darkness)))
-             Capsule()
-                 .fill(Color(red: 0.10, green: 0.12, blue: 0.30).opacity(0.60 * darkness))
--
--            knobView(night: night)
--                .offset(x: pad + knobX)
-         }
-         .frame(width: trackW, height: trackH)
-         .glassEffect(.regular, in: Capsule())
-+        // O botão fica acima do material, com tamanho e alinhamento estáveis.
-+        .overlay(alignment: .leading) {
-+            knobView(night: night)
-+                .offset(x: pad + knobX)
-+        }
-         // luz na borda
-         .overlay(
-             Capsule().strokeBorder(
-@@ -81,10 +91,9 @@ struct GlassThemeToggle: View {
-             )
-         )
-         .contentShape(Capsule())
--        .gesture(drag)
--        .onTapGesture {
--            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { isDark.toggle() }
--        }
-+        // Anima apenas o controle; a troca do tema da janela não herda a animação.
-+        .animation(dragState == nil ? .easeInOut(duration: 0.24) : nil, value: knobX)
-+        .gesture(drag.exclusively(before: TapGesture().onEnded { isDark.toggle() }))
-         .accessibilityElement()
-         .accessibilityLabel("Tema escuro")
-         .accessibilityValue(isDark ? "ligado" : "desligado")
-@@ -94,15 +103,16 @@ struct GlassThemeToggle: View {
- 
-     private var drag: some Gesture {
-         DragGesture(minimumDistance: 3)
--            .onChanged { value in
--                dragX = min(max(restingX + value.translation.width, 0), travel)
-+            .updating($dragState) { value, state, _ in
-+                state = DragState(
-+                    origin: state?.origin ?? restingX,
-+                    translation: value.translation.width
-+                )
-             }
--            .onEnded { _ in
--                let end = dragX ?? restingX
--                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
--                    isDark = end > travel / 2
--                    dragX = nil
--                }
-+            .onEnded { value in
-+                let origin = dragState?.origin ?? restingX
-+                let end = min(max(origin + value.translation.width, 0), travel)
-+                isDark = end > travel / 2
-             }
++    nonisolated private static func requiresKeychainAuthorization(_ error: Error) -> Bool {
++        guard case GTMAppAuth.KeychainStore.Error.unhandled(let status) = error else { return false }
++        return [errSecInteractionNotAllowed, errSecInteractionRequired, errSecAuthFailed,
++                errSecUserCanceled, errSecDuplicateItem].contains(status)
      }
  
+     nonisolated private static func isNetworkError(_ error: Error) -> Bool {
 diff --git a/Sources/Views/Profile/ProfileSettingsView.swift b/Sources/Views/Profile/ProfileSettingsView.swift
-index da82517..006249e 100644
 --- a/Sources/Views/Profile/ProfileSettingsView.swift
 +++ b/Sources/Views/Profile/ProfileSettingsView.swift
-@@ -110,43 +110,6 @@ struct ProfileSettingsView: View {
+@@ -110,43 +110,6 @@
  
      private var appearanceSection: some View {
          SettingsSection(title: "Aparência", icon: "circle.lefthalf.filled", intensity: intensity) {
@@ -138,7 +116,19 @@ index da82517..006249e 100644
              HStack {
                  Text("Liquid Glass").font(.headline)
                  Spacer()
-@@ -337,108 +300,6 @@ struct ProfileSettingsView: View {
+@@ -180,6 +143,11 @@
+ 
+     private var googleSection: some View {
+         SettingsSection(title: "Google", icon: "person.crop.circle.badge.checkmark", intensity: intensity) {
++            if let notice = auth.credentialNotice {
++                Label(notice, systemImage: "lock.trianglebadge.exclamationmark")
++                    .font(.caption)
++                    .foregroundStyle(.orange)
++            }
+             HStack(spacing: 12) {
+                 ZStack {
+                     Circle().fill(.blue.opacity(0.10)).frame(width: 42, height: 42)
+@@ -337,108 +305,6 @@
      }
  }
  
@@ -247,3 +237,1713 @@ index da82517..006249e 100644
  private struct SettingsSection<Content: View>: View {
      let title: String
      let icon: String
+diff --git a/Sources/Views/Library/SubjectDetailView.swift b/Sources/Views/Library/SubjectDetailView.swift
+--- a/Sources/Views/Library/SubjectDetailView.swift
++++ b/Sources/Views/Library/SubjectDetailView.swift
+@@ -70,9 +70,7 @@
+                         ForEach(filteredItems) { item in itemLink(item) }
+                     } else {
+                         ForEach(rootFolders, id: \.self) { folder in
+-                            NavigationLink {
+-                                FolderBrowserView(subject: subject, type: type, status: status, path: [folder])
+-                            } label: {
++                            NavigationLink(value: StudyRoute.folder(subject, type: type, status: status.rawValue, path: [folder])) {
+                                 FolderRow(title: folder, count: filteredItems.filter { $0.folderPath.first == folder }.count, palette: palette, intensity: intensity)
+                             }
+                             .buttonStyle(.plain)
+@@ -95,22 +93,10 @@
+     }
+ 
+     private var subjectHero: some View {
+-        VStack(alignment: .leading, spacing: 9) {
+-            ZStack {
+-                Circle().fill(.white.opacity(0.30)).frame(width: 60, height: 60)
+-                Image(systemName: subject.icon).font(.title.bold())
+-            }
+-            Text(subject.title).font(.largeTitle.bold())
+-            Text(subject.subtitle).font(.headline).foregroundStyle(.secondary)
+-            Text("\(catalog.count(for: subject)) materiais").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+-        }
+-        .frame(maxWidth: .infinity, alignment: .leading)
+-        .padding(22)
+-        .background(
+-            LinearGradient(colors: [palette.primary.opacity(0.34), palette.secondary.opacity(0.13)], startPoint: .topLeading, endPoint: .bottomTrailing),
+-            in: RoundedRectangle(cornerRadius: 30, style: .continuous)
++        PatternStudyCard(
++            title: subject.title, subtitle: subject.subtitle,
++            count: catalog.count(for: subject), variant: .forSubject(subject.id), subjectID: subject.id, height: 280
+         )
+-        .kepleraeGlass(intensity: intensity, cornerRadius: 30, interactive: false)
+     }
+ 
+     private var searchField: some View {
+@@ -147,7 +133,7 @@
+     }
+ 
+     private func itemLink(_ item: StudyItem) -> some View {
+-        NavigationLink { StudyItemView(item: item) } label: {
++        NavigationLink(value: StudyRoute.item(item)) {
+             StudyItemRow(item: item, intensity: intensity)
+         }.buttonStyle(.plain)
+     }
+@@ -188,15 +174,18 @@
+             AmbientBackground(style: .library)
+             ScrollView {
+                 LazyVStack(spacing: 12) {
++                    PatternStudyCard(
++                        title: path.last ?? subject.title,
++                        subtitle: ([subject.title] + path.dropLast()).joined(separator: " › "),
++                        count: scoped.count, variant: .forSubject(subject.id), subjectID: subject.id, height: 280
++                    )
+                     ForEach(folders, id: \.self) { folder in
+-                        NavigationLink {
+-                            FolderBrowserView(subject: subject, type: type, status: status, path: path + [folder])
+-                        } label: {
++                        NavigationLink(value: StudyRoute.folder(subject, type: type, status: status.rawValue, path: path + [folder])) {
+                             FolderRow(title: folder, count: scoped.filter { $0.folderPath.dropFirst(path.count).first == folder }.count, palette: palette, intensity: intensity)
+                         }.buttonStyle(.plain)
+                     }
+                     ForEach(items) { item in
+-                        NavigationLink { StudyItemView(item: item) } label: { StudyItemRow(item: item, intensity: intensity) }.buttonStyle(.plain)
++                        NavigationLink(value: StudyRoute.item(item)) { StudyItemRow(item: item, intensity: intensity) }.buttonStyle(.plain)
+                     }
+                     if folders.isEmpty && items.isEmpty {
+                         ContentUnavailableView("Sem conteúdo", systemImage: "folder", description: Text("Não há itens com estes filtros."))
+diff --git a/Sources/Views/Library/LibraryView.swift b/Sources/Views/Library/LibraryView.swift
+--- a/Sources/Views/Library/LibraryView.swift
++++ b/Sources/Views/Library/LibraryView.swift
+@@ -16,7 +16,12 @@
+             if embedded {
+                 libraryContent
+             } else {
+-                NavigationStack { libraryContent }
++                NavigationStack {
++                    libraryContent
++                        .navigationDestination(for: StudyRoute.self) { route in
++                            StudyRouteDestination(route: route)
++                        }
++                }
+             }
+         }
+     }
+@@ -42,9 +47,7 @@
+                     }
+ 
+                     ForEach(catalog.subjects) { subject in
+-                        NavigationLink {
+-                            SubjectDetailView(subject: subject, preferredType: initialType)
+-                        } label: {
++                        NavigationLink(value: StudyRoute.subject(subject, type: initialType)) {
+                             LibrarySubjectCard(subject: subject, count: catalog.items(for: subject, type: initialType).count, intensity: intensity)
+                         }
+                         .buttonStyle(.plain)
+@@ -68,25 +71,9 @@
+     let intensity: Double
+ 
+     var body: some View {
+-        let palette = SubjectPalette.forSubject(subject.id)
+-        HStack(spacing: 16) {
+-            ZStack {
+-                Circle().fill(.white.opacity(0.30)).frame(width: 54, height: 54)
+-                Image(systemName: subject.icon).font(.title2.bold())
+-            }
+-            VStack(alignment: .leading, spacing: 4) {
+-                Text(subject.title).font(.headline)
+-                Text(subject.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+-                Text("\(count) materiais").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+-            }
+-            Spacer()
+-            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.secondary)
+-        }
+-        .padding(18)
+-        .background(
+-            LinearGradient(colors: [palette.primary.opacity(0.24), palette.secondary.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing),
+-            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
++        PatternStudyCard(
++            title: subject.title, subtitle: subject.subtitle,
++            count: count, variant: .forSubject(subject.id), subjectID: subject.id, height: 280
+         )
+-        .kepleraeGlass(intensity: intensity, cornerRadius: 26)
+     }
+ }
+diff --git a/Sources/Views/Home/HomeStudyCards.swift b/Sources/Views/Home/HomeStudyCards.swift
+--- a/Sources/Views/Home/HomeStudyCards.swift
++++ b/Sources/Views/Home/HomeStudyCards.swift
+@@ -131,9 +131,7 @@
+         let total = ReviewStore.intervalsInDays.count
+ 
+         return HStack(spacing: 10) {
+-            NavigationLink {
+-                StudyItemView(item: item)
+-            } label: {
++            NavigationLink(value: StudyRoute.item(item)) {
+                 HStack(spacing: 12) {
+                     Image(systemName: item.type.icon)
+                         .font(.title3)
+diff --git a/Sources/Views/Home/HomeView.swift b/Sources/Views/Home/HomeView.swift
+--- a/Sources/Views/Home/HomeView.swift
++++ b/Sources/Views/Home/HomeView.swift
+@@ -6,7 +6,8 @@
+     @EnvironmentObject private var auth: GoogleAuthStore
+     @AppStorage("glassIntensityPercent") private var glassIntensityPercent = 85
+     @State private var showExams = false
+-    let resetID: UUID
++    @State private var hoveredSubjectID: String?
++    @Binding var path: [StudyRoute]
+ 
+     private var intensity: Double { Double(glassIntensityPercent) / 100 }
+     private var completedCount: Int { studyState.completed.intersection(Set(catalog.items.map(\.id))).count }
+@@ -25,7 +26,7 @@
+     }
+ 
+     var body: some View {
+-        NavigationStack {
++        NavigationStack(path: $path) {
+             ZStack {
+                 AmbientBackground()
+ 
+@@ -51,11 +52,13 @@
+                 .scrollIndicators(.hidden)
+             }
+             .navigationTitle("Início")
++            .navigationDestination(for: StudyRoute.self) { route in
++                StudyRouteDestination(route: route)
++            }
+         }
+         .sheet(isPresented: $showExams) {
+             ExamManagerView()
+         }
+-        .id(resetID)
+     }
+ 
+     private var header: some View {
+@@ -101,9 +104,7 @@
+                 .tint(.cyan)
+ 
+             if let item = resumeItem {
+-                NavigationLink {
+-                    StudyItemView(item: item)
+-                } label: {
++                NavigationLink(value: StudyRoute.item(item)) {
+                     Label(completedCount == 0 ? "Começar estudo" : "Retomar estudo", systemImage: "play.fill")
+                         .font(.headline)
+                         .frame(maxWidth: .infinity)
+@@ -123,13 +124,13 @@
+ 
+     private var stats: some View {
+         HStack(spacing: 12) {
+-            NavigationLink { LibraryView(initialType: .lesson, embedded: true) } label: {
++            NavigationLink(value: StudyRoute.library(type: .lesson)) {
+                 StatTile(value: count(.lesson), title: "Aulas", icon: "play.circle.fill", tint: .blue, intensity: intensity)
+             }.buttonStyle(.plain)
+-            NavigationLink { LibraryView(initialType: .pdf, embedded: true) } label: {
++            NavigationLink(value: StudyRoute.library(type: .pdf)) {
+                 StatTile(value: count(.pdf), title: "PDFs", icon: "doc.text.fill", tint: .purple, intensity: intensity)
+             }.buttonStyle(.plain)
+-            NavigationLink { LibraryView(initialType: .audio, embedded: true) } label: {
++            NavigationLink(value: StudyRoute.library(type: .audio)) {
+                 StatTile(value: count(.audio), title: "Áudios", icon: "headphones", tint: .pink, intensity: intensity)
+             }.buttonStyle(.plain)
+         }
+@@ -140,26 +141,25 @@
+             HStack {
+                 Text("Suas matérias").font(.title2.bold())
+                 Spacer()
+-                NavigationLink {
+-                    LibraryView(embedded: true)
+-                } label: {
++                NavigationLink(value: StudyRoute.library(type: nil)) {
+                     Text("Ver todas")
+                         .font(.subheadline.weight(.semibold))
+                 }
+             }
+ 
+             let doneBySubject = completedBySubject
+-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 210, maximum: 340))], spacing: 14) {
++            LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 324), spacing: 21)], spacing: 21) {
+                 ForEach(catalog.subjects) { subject in
+-                    NavigationLink {
+-                        SubjectDetailView(subject: subject)
+-                    } label: {
++                    NavigationLink(value: StudyRoute.subject(subject, type: nil)) {
+                         SubjectHomeCard(
+                             subject: subject,
+                             count: catalog.count(for: subject),
+                             completed: doneBySubject[subject.id] ?? 0,
+-                            intensity: intensity
+-                        )
++                            dimPattern: hoveredSubjectID != nil && hoveredSubjectID != subject.id
++                        ) { hovering in
++                            if hovering { hoveredSubjectID = subject.id }
++                            else if hoveredSubjectID == subject.id { hoveredSubjectID = nil }
++                        }
+                     }
+                     .buttonStyle(.plain)
+                 }
+@@ -172,9 +172,7 @@
+         if let item = resumeItem {
+             VStack(alignment: .leading, spacing: 10) {
+                 Text("Continue de onde parou").font(.title3.bold())
+-                NavigationLink {
+-                    StudyItemView(item: item)
+-                } label: {
++                NavigationLink(value: StudyRoute.item(item)) {
+                     HStack(spacing: 13) {
+                         Image(systemName: item.type.icon)
+                             .font(.title3)
+@@ -224,62 +222,21 @@
+     let subject: Subject
+     let count: Int
+     let completed: Int
+-    let intensity: Double
+-
+-    @State private var hovering = false
++    let dimPattern: Bool
++    let onHoverChange: (Bool) -> Void
+ 
+     private var progress: Double { count == 0 ? 0 : Double(completed) / Double(count) }
+ 
+     var body: some View {
+-        let palette = SubjectPalette.forSubject(subject.id)
+-        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+-        VStack(alignment: .leading, spacing: 12) {
+-            HStack {
+-                ZStack {
+-                    Circle().fill(.white.opacity(0.28)).frame(width: 45, height: 45)
+-                    Image(systemName: subject.icon).font(.title3.bold())
+-                }
+-                Spacer()
+-                Image(systemName: "arrow.up.right")
+-                    .font(.caption.bold())
+-                    .foregroundStyle(.secondary)
+-                    .offset(x: hovering ? 2 : 0, y: hovering ? -2 : 0)
+-            }
+-            Spacer(minLength: 2)
+-            Text(subject.title)
+-                .font(.subheadline.weight(.bold))
+-                .lineLimit(2)
+-                .minimumScaleFactor(0.8)
+-            HStack {
+-                Text(count == 1 ? "1 material" : "\(count) materiais")
+-                Spacer()
+-                if completed > 0 {
+-                    Text("\(Int(progress * 100))%").monospacedDigit()
+-                }
+-            }
+-            .font(.caption)
+-            .foregroundStyle(.secondary)
+-
+-            ThinProgressBar(value: progress, tint: palette.primary)
+-        }
+-        .frame(maxWidth: .infinity, minHeight: 156, alignment: .leading)
+-        .padding(16)
+-        // pontos por cima do degradê, esmaecendo para o canto oposto
+-        .background {
+-            DotPattern(kind: palette.pattern, color: palette.primary.opacity(0.5), animated: hovering)
+-                .mask(
+-                    LinearGradient(colors: [.black, .clear], startPoint: .topTrailing, endPoint: .bottomLeading)
+-                )
+-                .clipShape(shape)
+-        }
+-        .background(
+-            LinearGradient(colors: [palette.primary.opacity(0.28), palette.secondary.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing),
+-            in: shape
++        PatternStudyCard(
++            title: subject.title,
++            subtitle: subject.subtitle,
++            count: count,
++            variant: .forSubject(subject.id),
++            subjectID: subject.id,
++            progress: progress,
++            dimPattern: dimPattern,
++            onHoverChange: onHoverChange
+         )
+-        .kepleraeGlass(intensity: intensity, cornerRadius: 26)
+-        .scaleEffect(hovering ? 1.015 : 1)
+-        .animation(.smooth(duration: 0.25), value: hovering)
+-        .onHover { hovering = $0 }
+-        .accessibilityElement(children: .combine)
+     }
+ }
+diff --git a/Sources/Design/GlassThemeToggle.swift b/Sources/Design/GlassThemeToggle.swift
+--- a/Sources/Design/GlassThemeToggle.swift
++++ b/Sources/Design/GlassThemeToggle.swift
+@@ -36,130 +36,110 @@
+     }
+ }
+ 
+-// MARK: - Toggle de vidro (arrasta ou clica)
++// MARK: - Seletor desenhado em uma única superfície
+ 
+ struct GlassThemeToggle: View {
+     @Binding var isDark: Bool
++    @Environment(\.accessibilityReduceMotion) private var reduceMotion
++    @GestureState private var dragState: ThemeDragState?
+ 
+-    private let trackW: CGFloat = 80
+-    private let trackH: CGFloat = 40
+-    private let knob: CGFloat = 32
+-
+-    /// posição do botão enquanto arrasta (nil = em repouso)
+-    @State private var dragX: CGFloat?
+-
+-    private var pad: CGFloat { (trackH - knob) / 2 }
+-    private var travel: CGFloat { trackW - knob - pad * 2 }
++    private let travel: CGFloat = 40
+     private var restingX: CGFloat { isDark ? travel : 0 }
+-    private var knobX: CGFloat { dragX ?? restingX }
+-    private var darkness: Double { Double(knobX / travel) }
++    private var knobX: CGFloat {
++        guard let dragState else { return restingX }
++        return min(max(dragState.origin + dragState.translation, 0), travel)
++    }
+ 
+     var body: some View {
+-        let night = dragX == nil ? isDark : darkness > 0.5
+-
+-        ZStack(alignment: .leading) {
+-            // céu: dia -> noite acompanha o botão
+-            Capsule()
+-                .fill(Color(red: 0.55, green: 0.78, blue: 1.0).opacity(0.30 * (1 - darkness)))
+-            Capsule()
+-                .fill(Color(red: 0.10, green: 0.12, blue: 0.30).opacity(0.60 * darkness))
+-
+-            knobView(night: night)
+-                .offset(x: pad + knobX)
+-        }
+-        .frame(width: trackW, height: trackH)
+-        .glassEffect(.regular, in: Capsule())
+-        // luz na borda
+-        .overlay(
+-            Capsule().strokeBorder(
+-                LinearGradient(
+-                    colors: [.white.opacity(0.75), .white.opacity(0.05), .white.opacity(0.35)],
+-                    startPoint: .topLeading,
+-                    endPoint: .bottomTrailing
+-                ),
+-                lineWidth: 1
+-            )
+-        )
+-        .contentShape(Capsule())
+-        .gesture(drag)
+-        .onTapGesture {
+-            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { isDark.toggle() }
+-        }
+-        .accessibilityElement()
+-        .accessibilityLabel("Tema escuro")
+-        .accessibilityValue(isDark ? "ligado" : "desligado")
+-        .accessibilityAddTraits(.isButton)
+-        .accessibilityAction { isDark.toggle() }
++        ThemeToggleArtwork(progress: Double(knobX / travel))
++            .frame(width: 80, height: 40)
++            .animation(dragState == nil && !reduceMotion ? .easeInOut(duration: 0.32) : nil, value: knobX)
++            .contentShape(Capsule())
++            .gesture(drag.exclusively(before: TapGesture().onEnded { isDark.toggle() }))
++            .focusable()
++            .onKeyPress(.space) { isDark.toggle(); return .handled }
++            .onKeyPress(.return) { isDark.toggle(); return .handled }
++            .accessibilityElement(children: .ignore)
++            .accessibilityLabel("Tema escuro")
++            .accessibilityValue(isDark ? "ligado" : "desligado")
++            .accessibilityAddTraits(.isButton)
++            .accessibilityAction { isDark.toggle() }
+     }
+ 
+     private var drag: some Gesture {
+         DragGesture(minimumDistance: 3)
+-            .onChanged { value in
+-                dragX = min(max(restingX + value.translation.width, 0), travel)
++            .updating($dragState) { value, state, _ in
++                state = ThemeDragState(origin: state?.origin ?? restingX, translation: value.translation.width)
+             }
+-            .onEnded { _ in
+-                let end = dragX ?? restingX
+-                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+-                    isDark = end > travel / 2
+-                    dragX = nil
+-                }
++            .onEnded { value in
++                let end = (dragState?.origin ?? restingX) + value.translation.width
++                isDark = end > travel / 2
+             }
+-    }
+-
+-    private func knobView(night: Bool) -> some View {
+-        ZStack {
+-            Circle().fill(night ? Color(white: 0.16) : Color.white)
+-            Circle().strokeBorder(.white.opacity(night ? 0.18 : 0.9), lineWidth: 1)
+-            PixelGlyph(night: night)
+-        }
+-        .frame(width: knob, height: knob)
+-        .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
+-        .animation(.smooth(duration: 0.3), value: night)
+     }
+ }
+ 
+-// MARK: - Ícone de pixels: a lua se reconstrói em sol
++private struct ThemeDragState {
++    let origin: CGFloat
++    let translation: CGFloat
++}
+ 
+-private struct PixelGlyph: View {
+-    let night: Bool
+-
+-    private let n = 9
+-    private let step: CGFloat = 2.9
+-    private let dot: CGFloat = 2.2
++/// Cores explícitas: nenhum material nativo, imagem de máscara ou 81 subviews
++/// reconfigurados enquanto o macOS troca a aparência da janela.
++private struct ThemeToggleArtwork: View, Animatable {
++    var progress: Double
++    nonisolated var animatableData: Double {
++        get { progress }
++        set { progress = newValue }
++    }
+ 
+     var body: some View {
+-        ZStack {
+-            ForEach(0..<(n * n), id: \.self) { i in
+-                let x = i % n
+-                let y = i / n
+-                let on = night ? pixelIsMoon(x, y) : pixelIsSun(x, y)
++        let p = min(max(progress, 0), 1)
++        Canvas { context, size in
++            let bounds = CGRect(origin: .zero, size: size)
++            let track = Path(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), cornerRadius: size.height / 2)
++            context.fill(track, with: .linearGradient(
++                Gradient(colors: [mix((0.79, 0.91, 0.98), (0.14, 0.20, 0.38), p),
++                                  mix((0.94, 0.97, 1.0), (0.24, 0.30, 0.49), p)]),
++                startPoint: .zero, endPoint: CGPoint(x: size.width, y: size.height)
++            ))
++            context.stroke(track, with: .color(.white.opacity(0.65)), lineWidth: 1)
++            let thumb = CGRect(x: 4 + 40 * p, y: 4, width: 32, height: 32)
++            // Sombra fica confinada ao botão, sem camadas pretas atravessando a trilha.
++            var shadow = context
++            shadow.addFilter(.shadow(color: .black.opacity(0.16), radius: 2, x: 0, y: 1))
++            shadow.fill(Path(ellipseIn: thumb), with: .color(mix((1, 1, 1), (0.22, 0.27, 0.42), p)))
++            context.stroke(Path(ellipseIn: thumb.insetBy(dx: 0.5, dy: 0.5)), with: .color(.white.opacity(0.6)), lineWidth: 1)
+ 
+-                Circle()
+-                    .frame(width: dot, height: dot)
+-                    .scaleEffect(on ? 1 : 0.01)
+-                    // atraso pela diagonal: os pontos "se reorganizam" em onda
+-                    .animation(
+-                        .spring(response: 0.38, dampingFraction: 0.6).delay(Double(x + y) * 0.02),
+-                        value: night
+-                    )
+-                    .position(x: (CGFloat(x) + 0.5) * step, y: (CGFloat(y) + 0.5) * step)
++            for y in 0..<9 {
++                for x in 0..<9 {
++                    let sun = Self.sun(x, y)
++                    let moon = Self.moon(x, y)
++                    let phase = min(max((p * 1.32) - Double(x + y) * 0.02, 0), 1)
++                    let visibility = (sun ? 1.0 - phase : 0) + (moon ? phase : 0)
++                    guard visibility > 0.01 else { continue }
++                    let radius = 1.1 * sqrt(visibility)
++                    let point = CGPoint(x: thumb.midX + Double(x - 4) * 2.9,
++                                        y: thumb.midY + Double(y - 4) * 2.9)
++                    let dot = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
++                    context.fill(Path(ellipseIn: dot), with: .color(mix((0.96, 0.56, 0.12), (0.94, 0.97, 1), p).opacity(visibility)))
++                }
+             }
+         }
+-        .frame(width: CGFloat(n) * step, height: CGFloat(n) * step)
+-        .foregroundStyle(night ? Color.white : Color(red: 0.96, green: 0.56, blue: 0.12))
++        .accessibilityHidden(true)
++    }
++
++    private func mix(_ day: (Double, Double, Double), _ night: (Double, Double, Double), _ p: Double) -> Color {
++        Color(red: day.0 + (night.0 - day.0) * p,
++              green: day.1 + (night.1 - day.1) * p,
++              blue: day.2 + (night.2 - day.2) * p)
++    }
++
++    private static func moon(_ x: Int, _ y: Int) -> Bool {
++        hypot(Double(x) - 4, Double(y) - 4) <= 3.7 && hypot(Double(x) - 5.9, Double(y) - 2.6) > 3.1
++    }
++
++    private static func sun(_ x: Int, _ y: Int) -> Bool {
++        if hypot(Double(x) - 4, Double(y) - 4) <= 2.1 { return true }
++        return [(4, 0), (4, 8), (0, 4), (8, 4), (1, 1), (7, 1), (1, 7), (7, 7)].contains { $0.0 == x && $0.1 == y }
+     }
+ }
+-
+-// grade 9x9, centro em (4, 4)
+-private func pixelIsMoon(_ x: Int, _ y: Int) -> Bool {
+-    let px = Double(x), py = Double(y)
+-    let outer = hypot(px - 4, py - 4) <= 3.7
+-    let cut = hypot(px - 5.9, py - 2.6) <= 3.1
+-    return outer && !cut
+-}
+-
+-private func pixelIsSun(_ x: Int, _ y: Int) -> Bool {
+-    if hypot(Double(x) - 4, Double(y) - 4) <= 2.1 { return true }
+-    let rays = [(4, 0), (4, 8), (0, 4), (8, 4), (1, 1), (7, 1), (1, 7), (7, 7)]
+-    return rays.contains { $0.0 == x && $0.1 == y }
+-}
+diff --git a/Sources/App/RootView.swift b/Sources/App/RootView.swift
+--- a/Sources/App/RootView.swift
++++ b/Sources/App/RootView.swift
+@@ -41,7 +41,7 @@
+     @State private var selection: MainDestination = .home
+     @State private var showProfile = false
+     @State private var showSearch = false
+-    @State private var homeResetID = UUID()
++    @State private var homeNavigation = StudyNavigationState()
+     @AppStorage("appTheme") private var appThemeRaw = AppTheme.system.rawValue
+ 
+     private var theme: AppTheme { AppTheme(rawValue: appThemeRaw) ?? .system }
+@@ -180,7 +180,7 @@
+             .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
+         } detail: {
+             selectedContent
+-                .id(selectedContentID)
++                .id(selection)
+                 .background(AmbientBackground(style: selection == .pomodoro ? .focus : .standard))
+         }
+         .navigationSplitViewStyle(.balanced)
+@@ -200,7 +200,7 @@
+     private var selectedContent: some View {
+         switch selection {
+         case .home:
+-            HomeView(resetID: homeResetID)
++            HomeView(path: $homeNavigation.path)
+         case .pomodoro:
+             PomodoroView()
+         case .questions:
+@@ -210,13 +210,9 @@
+         }
+     }
+ 
+-    private var selectedContentID: AnyHashable {
+-        selection == .home ? AnyHashable(homeResetID) : AnyHashable(selection)
+-    }
+-
+     private func select(_ destination: MainDestination) {
+-        if destination == .home && selection == .home {
+-            homeResetID = UUID()
++        if destination == .home {
++            homeNavigation.returnHome()
+         }
+         selection = destination
+     }
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -4,7 +4,9 @@
+ 
+ ## Recursos
+ 
+-- Barra lateral para Início, Pomodoro, Questões, Notas e Perfil.
++- Barra lateral para Início, Pomodoro, Questões, Notas e Perfil. Início limpa a navegação de matérias, pastas e materiais abertos.
++- Cards animados com seis cores, 289,8 pontos de altura e os padrões 5×5 da referência Pattern Cards: círculos/contornos, partículas, interação com o cursor e brilho. Os cabeçalhos de matérias e pastas reutilizam o efeito em uma área separada do texto.
++- Seletor de tema apenas na barra lateral, desenhado em Canvas para não depender do material nativo durante a troca de aparência.
+ - Catálogo original da versão 2.0: 1.022 materiais (703 aulas, 306 PDFs e 13 áudios).
+ - Ordem de Português preservada; links de pastas do Drive resolvem o arquivo da aula pelo nome.
+ - Reprodução com AVPlayer, leitor PDFKit com janela em tela cheia e cache local.
+@@ -25,7 +27,7 @@
+ 
+ ### Login Google e assinatura Apple
+ 
+-O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. Uma atualização de um pacote com assinatura ad hoc pode pedir novamente autorização de acesso ao Chaves.
++O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. O aplicativo não abre pedidos automáticos de senha do Chaves: consultas e gravações são não interativas e mantêm as ACLs existentes. Se uma atualização ad hoc não tiver acesso à credencial protegida por outra assinatura, será necessário entrar novamente no Google. Se o Chaves também impedir a gravação, a sessão funciona apenas até fechar o app e o Perfil informa essa condição. Para preservar a identidade entre atualizações, distribua builds assinadas com o mesmo certificado Developer ID.
+ 
+ Sem certificado configurado, o workflow gera um **build de teste com assinatura ad hoc**, sem notarização. Para distribuição com assinatura Developer ID Application, configure estes **Secrets** do repositório:
+ 
+@@ -63,6 +65,14 @@
+ 
+ Abertura e compilação não substituem o teste com conta Google: após assinar, confirme login, recebimento dos dados já existentes e propagação de alterações entre Mac, Android e iPhone. A regra de resolução de conflitos é a mesma da 2.0: o snapshot com data mais recente prevalece; edições simultâneas em dispositivos diferentes não são mescladas por campo.
+ 
++## Parâmetros visuais
++
++A referência é [Pattern Cards, de Zsolt Kacso](https://experiments.thisiswhitespace.com/pattern-cards). O app usa um port nativo em SwiftUI/Canvas; não carrega scripts remotos nem incorpora uma WebView. Os 51 parâmetros solicitados ficam em `Resources/PatternCards.defaults.json`. A altura foi posteriormente reduzida em 30%, de 414 para 289,8, conforme solicitado. Os demais valores foram mantidos.
++
++`Prototype/PatternCards.useDialKit.ts` contém a chamada `useDialKit("Pattern Cards", ...)` com os mesmos defaults para uso no protótipo web. Esse arquivo é uma referência de configuração e não uma dependência do app macOS.
++
++Os testes cobrem a paridade dos defaults, a geometria dos três padrões, o crescimento e retorno dos círculos, os limites de partículas, a limpeza da navegação e a restauração do controle de interação do Chaves em caso de erro.
++
+ ## Origem
+ 
+ Portado do pacote `Keplerae-iOS-2.0.zip` fornecido no backup de continuidade 2.0. Os projetos Android e iOS existentes não são modificados por este repositório.
+diff --git a/project.yml b/project.yml
+--- a/project.yml
++++ b/project.yml
+@@ -28,6 +28,8 @@
+       - path: Resources/Sounds
+         buildPhase: resources
+       - path: Resources/Animations
++        buildPhase: resources
++      - path: Resources/PatternCards.defaults.json
+         buildPhase: resources
+       - path: Resources/catalog.json
+         buildPhase: resources
+@@ -66,6 +68,12 @@
+       - path: Sources/Models
+       - path: Sources/Auth/CrossPlatformOAuth.swift
+       - path: Sources/Auth/MacOAuthConfiguration.swift
++      - path: Sources/Auth/NoninteractiveKeychainHelper.swift
++      - path: Resources/PatternCards.defaults.json
++        buildPhase: resources
++    dependencies:
++      - package: GTMAppAuth
++        product: GTMAppAuth
+     settings:
+       base:
+         PRODUCT_BUNDLE_IDENTIFIER: com.aistudio.keplerae.coretests
+diff --git a/Sources/Auth/NoninteractiveKeychainHelper.swift b/Sources/Auth/NoninteractiveKeychainHelper.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/Auth/NoninteractiveKeychainHelper.swift
+@@ -0,0 +1,96 @@
++import Foundation
++import Security
++import GTMAppAuth
++
++/// Mantém o formato/ACL do GTMAppAuth, mas nunca abre um pedido de senha em segundo plano.
++/// Uma credencial protegida por outra assinatura continua inacessível.
++final class NoninteractiveKeychainHelper: NSObject, GTMAppAuth.KeychainHelper {
++    private static let interactionLock = NSRecursiveLock()
++    let accountName = "OAuth"
++    let keychainAttributes: Set<GTMAppAuth.KeychainAttribute>
++    private let base: any GTMAppAuth.KeychainHelper
++
++    init(keychainAttributes: Set<GTMAppAuth.KeychainAttribute>) {
++        self.keychainAttributes = keychainAttributes
++        base = GTMAppAuth.KeychainStore(itemName: "", keychainAttributes: keychainAttributes).keychainHelper
++        super.init()
++    }
++
++    func keychainQuery(forService service: String) -> [String: Any] {
++        var query = base.keychainQuery(forService: service)
++        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
++        return query
++    }
++
++    func passwordData(forService service: String) throws -> Data {
++        guard !service.isEmpty else { throw GTMAppAuth.KeychainStore.Error.noService }
++        var query = keychainQuery(forService: service)
++        query[kSecReturnData as String] = true
++        query[kSecMatchLimit as String] = kSecMatchLimitOne
++        var result: CFTypeRef?
++        let status = try withInteractionDisabled { SecItemCopyMatching(query as CFDictionary, &result) }
++        guard status != errSecItemNotFound else {
++            throw GTMAppAuth.KeychainStore.Error.passwordNotFound(forItemName: service)
++        }
++        guard status == errSecSuccess else { throw GTMAppAuth.KeychainStore.Error.unhandled(status: status) }
++        guard let data = result as? Data else {
++            throw GTMAppAuth.KeychainStore.Error.unexpectedPasswordData(forItemName: service)
++        }
++        return data
++    }
++
++    func password(forService service: String) throws -> String {
++        guard let value = String(data: try passwordData(forService: service), encoding: .utf8) else {
++            throw GTMAppAuth.KeychainStore.Error.unexpectedPasswordData(forItemName: service)
++        }
++        return value
++    }
++
++    func setPassword(_ password: String, forService service: String) throws {
++        try setPassword(data: Data(password.utf8), forService: service, accessibility: nil)
++    }
++
++    func setPassword(_ password: String, forService service: String, accessibility: CFTypeRef) throws {
++        try setPassword(data: Data(password.utf8), forService: service, accessibility: accessibility)
++    }
++
++    func setPassword(data: Data, forService service: String, accessibility: CFTypeRef?) throws {
++        guard !service.isEmpty else { throw GTMAppAuth.KeychainStore.Error.noService }
++        let query = keychainQuery(forService: service)
++        var attributes: [String: Any] = [kSecValueData as String: data]
++        if let accessibility { attributes[kSecAttrAccessible as String] = accessibility }
++        // Atualiza no lugar: não apaga/recria a ACL a cada renovação do token.
++        let status = try withInteractionDisabled {
++            let updated = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
++            guard updated == errSecItemNotFound else { return updated }
++            var item = query
++            attributes.forEach { item[$0.key] = $0.value }
++            return SecItemAdd(item as CFDictionary, nil)
++        }
++        guard status == errSecSuccess else { throw GTMAppAuth.KeychainStore.Error.unhandled(status: status) }
++    }
++
++    func removePassword(forService service: String) throws {
++        guard !service.isEmpty else { throw GTMAppAuth.KeychainStore.Error.noService }
++        let status = try withInteractionDisabled { SecItemDelete(keychainQuery(forService: service) as CFDictionary) }
++        guard status != errSecItemNotFound else {
++            throw GTMAppAuth.KeychainStore.Error.failedToDeletePasswordBecauseItemNotFound(itemName: service)
++        }
++        guard status == errSecSuccess else { throw GTMAppAuth.KeychainStore.Error.unhandled(status: status) }
++    }
++
++    /// O Chaves legado ignora os controles novos de UI (Apple FB16959400).
++    /// O bloqueio é síncrono e escopado; restaura a flag mesmo quando a operação falha.
++    func withInteractionDisabled<T>(_ operation: () throws -> T) throws -> T {
++        Self.interactionLock.lock()
++        defer { Self.interactionLock.unlock() }
++        guard keychainAttributes.contains(.useFileBasedKeychain) else { return try operation() }
++        var previous: DarwinBoolean = false
++        let readStatus = SecKeychainGetUserInteractionAllowed(&previous)
++        guard readStatus == errSecSuccess else { throw GTMAppAuth.KeychainStore.Error.unhandled(status: readStatus) }
++        let setStatus = SecKeychainSetUserInteractionAllowed(false)
++        guard setStatus == errSecSuccess else { throw GTMAppAuth.KeychainStore.Error.unhandled(status: setStatus) }
++        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
++        return try operation()
++    }
++}
+diff --git a/Sources/Models/PatternAnimationEngine.swift b/Sources/Models/PatternAnimationEngine.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/Models/PatternAnimationEngine.swift
+@@ -0,0 +1,228 @@
++import Foundation
++import CoreGraphics
++
++enum PatternCardVariant: String, CaseIterable, Sendable {
++    case a, b, c
++
++    var occupiedCells: [Int] {
++        switch self {
++        case .a: return [2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 22]
++        case .b: return [0, 1, 5, 6, 7, 11, 12, 13, 17, 18, 19, 23, 24]
++        case .c: return [2, 7, 10, 11, 12, 13, 14, 17, 22]
++        }
++    }
++
++    static func forSubject(_ id: String) -> Self {
++        switch id {
++        case "portugues", "sus": return .b
++        case "matematica", "profisio": return .c
++        default: return .a
++        }
++    }
++}
++
++/// Port nativo da geometria 5×5, preenchimento/anel, partículas e colisões
++/// observados em experiments.thisiswhitespace.com/pattern-cards.
++/// Não usa WebView nem executa código remoto dentro do aplicativo.
++final class PatternAnimationEngine {
++    struct Dot {
++        let center: CGPoint
++        let solidRadius: Double
++        let ringRadius: Double
++        let ringWidth: Double
++        let ringOpacity: Double
++        let opacity: Double
++    }
++
++    struct Frame {
++        let dots: [Dot]
++        let particles: [Dot]
++    }
++
++    private struct Particle {
++        var center: CGPoint
++        var age: Double
++        let phase: Double
++        let scale: Double
++    }
++
++    private struct Tween {
++        var start: CGPoint = .zero
++        var target: CGPoint = .zero
++        var began = 0.0
++    }
++
++    let variant: PatternCardVariant
++    private var previousTime: Double?
++    private var elapsed = 0.0
++    private var hovering = false
++    private var centerTweens: [Int: Tween] = [:]
++    private var centers: [Int: CGPoint] = [:]
++    private var scales: [Int: Double] = [:]
++    private var particles: [Particle] = []
++    private var lastSpawn: [Int: Double] = [:]
++    private var staticOpacity = 1.0
++    private var particleOpacity = 1.0
++    private var randomState: UInt64
++    private let intensities: [Double]
++
++    init(variant: PatternCardVariant, seed: UInt64 = 1) {
++        self.variant = variant
++        randomState = seed &+ 1
++        intensities = (0..<25).map { index in
++            let hash = (UInt64(index + 1) &* 2_654_435_761) ^ seed
++            return 0.15 + 0.85 * Double(hash % 65_535) / 65_535
++        }
++    }
++
++    func frame(time: Double, cursor: CGPoint?, centerOffset: CGPoint, fallHeight: Double,
++               staticTarget: Double, parameters p: PatternCardParameters, reducedMotion: Bool = false) -> Frame {
++        let dt = previousTime.map { min(max(time - $0, 0), 0.05) } ?? 0
++        previousTime = time
++        if !reducedMotion { elapsed += dt }
++        let style: PatternCardParameters.PatternA
++        // Os três defaults têm o mesmo esquema, mas continuam configuráveis separadamente.
++        switch variant {
++        case .a: style = p.patternA
++        case .b: style = .init(size: p.patternB.size, dotScale: p.patternB.dotScale, ringStrokeScale: p.patternB.ringStrokeScale)
++        case .c: style = .init(size: p.patternC.size, dotScale: p.patternC.dotScale, ringStrokeScale: p.patternC.ringStrokeScale)
++        }
++        let cell = style.size / 5
++        let radius = cell * style.dotScale / 2
++        let stroke = 2 * radius * style.ringStrokeScale
++        let ringRadius = max(0, radius - stroke / 2)
++        let indices = variant.occupiedCells
++        let active = cursor != nil && !reducedMotion
++
++        if active != hovering {
++            for index in indices {
++                let current = centerValue(for: index, parameters: p, reducedMotion: reducedMotion)
++                centerTweens[index] = Tween(start: current, target: active ? centerOffset : .zero, began: elapsed)
++            }
++            hovering = active
++        }
++        let localCursor = active ? cursor.map { CGPoint(x: $0.x - centerOffset.x, y: $0.y - centerOffset.y) } : nil
++        let base = indices.map { CGPoint(x: Double($0 % 5) * cell + cell / 2, y: Double($0 / 5) * cell + cell / 2) }
++        var targets = base
++        let radii: [Double] = indices.enumerated().map { offset, index in
++            guard let cursor = localCursor, p.tilt.scaleMax > 1 else { return radius }
++            let distance = hypot(cursor.x - base[offset].x, cursor.y - base[offset].y)
++            let normalized = max(0, 1 - distance / max(0.001, p.tilt.scaleRadius))
++            let randomness = 1 + (intensities[index] - 1) * p.tilt.randomness
++            return radius * (1 + pow(normalized, max(0.05, p.tilt.easing)) * (p.tilt.scaleMax - 1) * randomness)
++        }
++
++        if active && !p.tilt.keepInGrid && p.tilt.scaleMax > 1 {
++            for _ in 0..<max(0, Int(p.tilt.packIterations.rounded())) {
++                for a in 0..<indices.count {
++                    for b in (a + 1)..<indices.count {
++                        let dx = targets[b].x - targets[a].x
++                        let dy = targets[b].y - targets[a].y
++                        let distance = hypot(dx, dy)
++                        let baseGap = hypot(base[b].x - base[a].x, base[b].y - base[a].y) - 2 * radius
++                        let minimum = radii[a] + radii[b] + baseGap
++                        if distance > 0.0001 && distance < minimum {
++                            let push = (minimum - distance) / 2
++                            targets[a].x -= dx / distance * push
++                            targets[a].y -= dy / distance * push
++                            targets[b].x += dx / distance * push
++                            targets[b].y += dy / distance * push
++                        }
++                    }
++                }
++            }
++        }
++
++        let pushAlpha = reducedMotion ? 1 : 1 - exp(-dt / max(0.001, p.tilt.pushSmoothingMs / 1000))
++        let scaleAlpha = reducedMotion ? 1 : 1 - exp(-dt / max(0.001, p.tilt.scaleSmoothingMs / 1000))
++        let fadeAlpha = reducedMotion ? 1 : 1 - exp(-dt / max(0.001, p.tilt.centerDurationMs / 1000))
++        staticOpacity += (staticTarget - staticOpacity) * fadeAlpha
++        particleOpacity += ((active ? 0.0 : 1.0) - particleOpacity) * fadeAlpha
++        var dots: [Dot] = []
++        for (offset, index) in indices.enumerated() {
++            let previous = centers[index] ?? base[offset]
++            let center = CGPoint(x: previous.x + (targets[offset].x - previous.x) * pushAlpha,
++                                 y: previous.y + (targets[offset].y - previous.y) * pushAlpha)
++            let oldScale = scales[index] ?? 1
++            let scale = oldScale + (radii[offset] / max(radius, 0.000001) - oldScale) * scaleAlpha
++            centers[index] = center
++            scales[index] = scale
++            let move = centerValue(for: index, parameters: p, reducedMotion: reducedMotion)
++            dots.append(dot(center: CGPoint(x: center.x + move.x, y: center.y + move.y),
++                            phase: phase(index), scale: scale, opacity: staticOpacity,
++                            radius: radius, ringRadius: ringRadius, stroke: stroke, parameters: p))
++        }
++
++        if !reducedMotion {
++            particles = particles.compactMap { particle in
++                var updated = particle
++                updated.age += dt
++                updated.center.y += p.particles.fallSpeed * dt
++                return updated.age < p.particles.lifetime && updated.center.y <= style.size + fallHeight + cell ? updated : nil
++            }
++            if p.particles.spawnRate > 0 {
++                let interval = 1 / p.particles.spawnRate
++                let bottom = Dictionary(grouping: indices, by: { $0 % 5 }).values.compactMap { $0.max() }
++                for index in bottom.sorted() {
++                    let last = lastSpawn[index] ?? -interval
++                    let jitter = (random() - 0.5) * p.particles.jitter * interval
++                    if elapsed - last >= interval + jitter {
++                        lastSpawn[index] = elapsed
++                        let point = centers[index] ?? CGPoint(x: Double(index % 5) * cell + cell / 2,
++                                                              y: Double(index / 5 + 1) * cell + cell / 2)
++                        particles.append(Particle(center: CGPoint(x: point.x, y: point.y + cell), age: 0,
++                                                  phase: phase(index) + 1.5 * random(), scale: scales[index] ?? 1))
++                    }
++                }
++            }
++        }
++
++        let falling: [Dot] = reducedMotion ? [] : particles.map { particle in
++            let life = particle.age / max(0.001, p.particles.lifetime)
++            let fade = life > p.particles.fadeStart
++                ? max(0, 1 - (life - p.particles.fadeStart) / max(0.001, 1 - p.particles.fadeStart)) : 1
++            return dot(center: particle.center, phase: particle.phase, scale: particle.scale,
++                       opacity: p.particles.startOpacity * fade * particleOpacity, radius: radius, ringRadius: ringRadius,
++                       stroke: stroke, parameters: p)
++        }
++        return Frame(dots: dots, particles: falling)
++    }
++
++    private func centerValue(for index: Int, parameters p: PatternCardParameters, reducedMotion: Bool) -> CGPoint {
++        let centerTween = centerTweens[index] ?? Tween()
++        if reducedMotion { return centerTween.target }
++        let delay = max(0, min(1, (intensities[index] - 0.15) / 0.85)) * p.tilt.centerStaggerMs / 1000
++        let fraction = min(max((elapsed - centerTween.began - delay) / max(0.001, p.tilt.centerDurationMs / 1000), 0), 1)
++        let eased = Self.centerEase(fraction)
++        return CGPoint(x: centerTween.start.x + (centerTween.target.x - centerTween.start.x) * eased,
++                       y: centerTween.start.y + (centerTween.target.y - centerTween.start.y) * eased)
++    }
++
++    private func phase(_ index: Int) -> Double { 0.45 * Double(index / 5) + 0.7 * Double(index % 5) }
++
++    private func dot(center: CGPoint, phase: Double, scale: Double, opacity: Double, radius: Double,
++                     ringRadius: Double, stroke: Double, parameters p: PatternCardParameters) -> Dot {
++        let wave = min(max((sin(elapsed * p.animation.speed * .pi * 2 + phase * p.animation.phaseSpread) + p.animation.fillBias + 1) / 2, 0), 1)
++        let mix = wave < 0.5 ? pow(2 * wave, p.animation.easing) / 2 : 1 - pow(2 * (1 - wave), p.animation.easing) / 2
++        return Dot(center: center, solidRadius: max(0, radius * (1 - mix)) * scale,
++                   ringRadius: ringRadius * scale, ringWidth: stroke * scale,
++                   ringOpacity: mix, opacity: opacity)
++    }
++
++    private func random() -> Double {
++        randomState = randomState &* 6_364_136_223_846_793_005 &+ 1
++        return Double(randomState >> 11) / Double(UInt64.max >> 11)
++    }
++
++    /// Resolve cubic-bezier(.22,.61,.36,1), igual à transição de centralização.
++    static func centerEase(_ fraction: Double) -> Double {
++        var low = 0.0, high = 1.0
++        for _ in 0..<16 {
++            let t = (low + high) / 2
++            let x = 3 * (1 - t) * (1 - t) * t * 0.22 + 3 * (1 - t) * t * t * 0.36 + t * t * t
++            if x < fraction { low = t } else { high = t }
++        }
++        let t = (low + high) / 2
++        return 3 * (1 - t) * (1 - t) * t * 0.61 + 3 * (1 - t) * t * t + t * t * t
++    }
++}
+diff --git a/Sources/Models/PatternCardParameters.swift b/Sources/Models/PatternCardParameters.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/Models/PatternCardParameters.swift
+@@ -0,0 +1,134 @@
++import Foundation
++
++/// Defaults solicitados para Pattern Cards, compartilhados pelo app e pelo protótipo.
++struct PatternCardParameters: Codable, Equatable, Sendable {
++    struct Typography: Codable, Equatable, Sendable {
++        let titleSize: Double
++        let titleWeight: Double
++        let descriptionSize: Double
++        let descriptionWeight: Double
++    }
++    let typography: Typography
++
++    struct Highlight: Codable, Equatable, Sendable {
++        let x: Double
++        let y: Double
++    }
++    let highlight: Highlight
++
++    struct Card: Codable, Equatable, Sendable {
++        let height: Double
++    }
++    let card: Card
++
++    struct Effect: Codable, Equatable, Sendable {
++        let scale: Double
++    }
++    let effect: Effect
++
++    struct Animation: Codable, Equatable, Sendable {
++        let speed: Double
++        let phaseSpread: Double
++        let easing: Double
++        let fillBias: Double
++    }
++    let animation: Animation
++
++    struct Particles: Codable, Equatable, Sendable {
++        let spawnRate: Double
++        let fallSpeed: Double
++        let jitter: Double
++        let lifetime: Double
++        let fadeStart: Double
++        let startOpacity: Double
++    }
++    let particles: Particles
++
++    struct PatternA: Codable, Equatable, Sendable {
++        let size: Double
++        let dotScale: Double
++        let ringStrokeScale: Double
++    }
++    let patternA: PatternA
++
++    struct PatternB: Codable, Equatable, Sendable {
++        let size: Double
++        let dotScale: Double
++        let ringStrokeScale: Double
++    }
++    let patternB: PatternB
++
++    struct PatternC: Codable, Equatable, Sendable {
++        let size: Double
++        let dotScale: Double
++        let ringStrokeScale: Double
++    }
++    let patternC: PatternC
++
++    struct Tilt: Codable, Equatable, Sendable {
++        let maxAngle: Double
++        let randomness: Double
++        let perspective: Double
++        let scaleMax: Double
++        let scaleRadius: Double
++        let packIterations: Double
++        let easing: Double
++        let centerDurationMs: Double
++        let centerStaggerMs: Double
++        let centerOffsetY: Double
++        let keepInGrid: Bool
++        let pushSmoothingMs: Double
++        let scaleSmoothingMs: Double
++        let fadeOthers: Bool
++        let othersOpacity: Double
++    }
++    let tilt: Tilt
++
++    struct Shimmer: Codable, Equatable, Sendable {
++        let enabled: Bool
++        let intensity: Double
++        let widthPct: Double
++        let angleDeg: Double
++        let blurPx: Double
++        let durationMs: Double
++        let loopDelayMs: Double
++        let color: String
++        let blendMode: String
++    }
++    let shimmer: Shimmer
++
++    static let reference = Self(
++        typography: .init(titleSize: 33.0, titleWeight: 700.0, descriptionSize: 17.0, descriptionWeight: 200.0),
++        highlight: .init(x: 0.11, y: -0.09),
++        card: .init(height: 289.8),
++        effect: .init(scale: 0.76),
++        animation: .init(speed: 0.44, phaseSpread: 2.25, easing: 3.0, fillBias: -0.34),
++        particles: .init(spawnRate: 0.6, fallSpeed: 47.0, jitter: 0.26, lifetime: 1.7, fadeStart: 0.0, startOpacity: 0.28),
++        patternA: .init(size: 127.0, dotScale: 0.86, ringStrokeScale: 0.06),
++        patternB: .init(size: 127.0, dotScale: 0.86, ringStrokeScale: 0.06),
++        patternC: .init(size: 127.0, dotScale: 0.86, ringStrokeScale: 0.06),
++        tilt: .init(maxAngle: 0.0, randomness: 0.56, perspective: 520.0, scaleMax: 3.8, scaleRadius: 161.0, packIterations: 40.0, easing: 1.6, centerDurationMs: 420.0, centerStaggerMs: 320.0, centerOffsetY: -43.0, keepInGrid: false, pushSmoothingMs: 260.0, scaleSmoothingMs: 220.0, fadeOthers: true, othersOpacity: 0.12),
++        shimmer: .init(enabled: true, intensity: 0.2, widthPct: 162.0, angleDeg: 38.0, blurPx: 60.0, durationMs: 320.0, loopDelayMs: 8000.0, color: "#ffffff", blendMode: "screen")
++    )
++
++    static let defaults: Self = {
++        guard let url = Bundle.main.url(forResource: "PatternCards.defaults", withExtension: "json"),
++              let data = try? Data(contentsOf: url),
++              let value = try? Self(flatJSON: data) else { return .reference }
++        return value
++    }()
++
++}
++
++extension PatternCardParameters {
++    init(flatJSON data: Data) throws {
++        let flat = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
++        var nested: [String: [String: Any]] = [:]
++        for (key, value) in flat {
++            let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
++            guard parts.count == 2 else { continue }
++            nested[parts[0], default: [:]][parts[1]] = value
++        }
++        self = try JSONDecoder().decode(Self.self, from: JSONSerialization.data(withJSONObject: nested))
++    }
++}
+diff --git a/Sources/Models/StudyNavigationState.swift b/Sources/Models/StudyNavigationState.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/Models/StudyNavigationState.swift
+@@ -0,0 +1,17 @@
++import Foundation
++
++/// Todas as telas de estudo pertencem à mesma pilha, inclusive pastas aninhadas.
++enum StudyRoute: Hashable {
++    case library(type: StudyContentType?)
++    case subject(Subject, type: StudyContentType?)
++    case folder(Subject, type: StudyContentType?, status: String, path: [String])
++    case item(StudyItem)
++}
++
++struct StudyNavigationState {
++    var path: [StudyRoute] = []
++
++    mutating func returnHome() {
++        path.removeAll()
++    }
++}
+diff --git a/Sources/Views/Components/PatternStudyCard.swift b/Sources/Views/Components/PatternStudyCard.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/Views/Components/PatternStudyCard.swift
+@@ -0,0 +1,230 @@
++import SwiftUI
++
++private struct PatternColors {
++    let background: Color
++    let foreground: Color
++    let dots: Color
++    let glow: Color
++    let glowOpacity: Double
++
++    static func forVariant(_ variant: PatternCardVariant, subjectID: String?) -> Self {
++        switch subjectID {
++        case "hu_legislacao":
++            return .init(background: Color(red: 36/255, green: 74/255, blue: 130/255), foreground: .white,
++                         dots: .white, glow: .cyan, glowOpacity: 0.35)
++        case "sus":
++            return .init(background: Color(red: 27/255, green: 113/255, blue: 85/255), foreground: .white,
++                         dots: .white, glow: .mint, glowOpacity: 0.35)
++        case "profisio":
++            return .init(background: Color(red: 119/255, green: 85/255, blue: 166/255), foreground: .white,
++                         dots: .white, glow: .pink, glowOpacity: 0.35)
++        default: break
++        }
++        switch variant {
++        case .a: return .init(background: Color(red: 10/255, green: 10/255, blue: 10/255), foreground: .white,
++                             dots: .white, glow: .white, glowOpacity: 0.12)
++        case .b: return .init(background: Color(red: 1, green: 110/255, blue: 0), foreground: .white,
++                             dots: .white, glow: Color(red: 1, green: 176/255, blue: 102/255), glowOpacity: 0.55)
++        case .c: return .init(background: Color(red: 236/255, green: 235/255, blue: 233/255),
++                             foreground: Color(white: 31/255), dots: Color(red: 1, green: 110/255, blue: 0),
++                             glow: Color(red: 1, green: 110/255, blue: 0), glowOpacity: 0.18)
++        }
++    }
++}
++
++/// Mesmo componente nos cards da home e no topo de cada matéria/pasta.
++struct PatternStudyCard: View {
++    let title: String
++    let subtitle: String
++    let count: Int
++    let variant: PatternCardVariant
++    let subjectID: String?
++    var progress: Double? = nil
++    var height: Double = PatternCardParameters.defaults.card.height
++    var dimPattern = false
++    var onHoverChange: (Bool) -> Void = { _ in }
++
++    @Environment(\.accessibilityReduceMotion) private var reduceMotion
++    @Environment(\.scenePhase) private var scenePhase
++    @State private var visible = false
++    @State private var cursor: CGPoint? = nil
++    @State private var hoverStart = 0.0
++    @State private var engine = PatternAnimationEngine(variant: .a)
++
++    init(title: String, subtitle: String, count: Int, variant: PatternCardVariant, subjectID: String? = nil, progress: Double? = nil,
++         height: Double = PatternCardParameters.defaults.card.height, dimPattern: Bool = false,
++         onHoverChange: @escaping (Bool) -> Void = { _ in }) {
++        self.title = title
++        self.subtitle = subtitle
++        self.count = count
++        self.variant = variant
++        self.subjectID = subjectID
++        self.progress = progress
++        self.height = height
++        self.dimPattern = dimPattern
++        self.onHoverChange = onHoverChange
++        let seed = title.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
++        _engine = State(initialValue: PatternAnimationEngine(variant: variant, seed: seed))
++    }
++
++    private let p = PatternCardParameters.defaults
++
++    var body: some View {
++        let colors = PatternColors.forVariant(variant, subjectID: subjectID)
++        GeometryReader { geometry in
++            let banner = height < p.card.height
++            let padding = banner ? 28.0 : (geometry.size.width * 0.118).rounded()
++            ZStack(alignment: banner ? .leading : .bottomLeading) {
++                colors.background
++                artwork(size: geometry.size, padding: padding, banner: banner, colors: colors)
++                VStack(alignment: .leading, spacing: (0.018 * height).rounded()) {
++                    Text(title)
++                        .font(.system(size: p.typography.titleSize, weight: .bold))
++                        .tracking(-0.02 * p.typography.titleSize)
++                        .lineLimit(banner ? 3 : 2)
++                        .minimumScaleFactor(0.65)
++                        .multilineTextAlignment(.leading)
++                    Text(subtitle)
++                        .font(.system(size: p.typography.descriptionSize, weight: .thin))
++                        .tracking(-0.01 * p.typography.descriptionSize)
++                        .opacity(0.7)
++                        .lineLimit(banner ? 2 : 1)
++                        .multilineTextAlignment(.leading)
++                    HStack {
++                        Text(count == 1 ? "1 material" : "\(count) materiais")
++                        Spacer(minLength: 0)
++                        if let progress { Text("\(Int(progress * 100))%").monospacedDigit() }
++                    }
++                    .font(.caption)
++                    .opacity(0.7)
++                    if let progress {
++                        ThinProgressBar(value: progress, tint: colors.foreground)
++                            .frame(height: 4)
++                    }
++                }
++                .foregroundStyle(colors.foreground)
++                .frame(maxWidth: banner ? geometry.size.width * 0.57 : .infinity, alignment: .leading)
++                .padding(padding)
++            }
++            .clipShape(RoundedRectangle(cornerRadius: 44.875, style: .continuous))
++            .contentShape(RoundedRectangle(cornerRadius: 44.875, style: .continuous))
++            .onContinuousHover { phase in
++                switch phase {
++                case .active(let location):
++                    if cursor == nil {
++                        hoverStart = Date.now.timeIntervalSinceReferenceDate
++                        onHoverChange(true)
++                    }
++                    cursor = location
++                case .ended:
++                    cursor = nil
++                    onHoverChange(false)
++                }
++            }
++        }
++        .frame(height: height)
++        .onAppear { visible = true }
++        .onDisappear { visible = false; cursor = nil; onHoverChange(false) }
++        .accessibilityElement(children: .combine)
++    }
++
++    private func artwork(size: CGSize, padding: Double, banner: Bool, colors: PatternColors) -> some View {
++        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !visible || reduceMotion || scenePhase != .active)) { timeline in
++            let time = timeline.date.timeIntervalSinceReferenceDate
++            Canvas { context, canvasSize in
++                drawHighlight(context: &context, size: canvasSize, colors: colors)
++                let patternSize: Double = {
++                    switch variant {
++                    case .a: return p.patternA.size
++                    case .b: return p.patternB.size
++                    case .c: return p.patternC.size
++                    }
++                }()
++                let scale = p.effect.scale
++                let span = patternSize * scale
++                // Cabeçalhos largos reservam uma coluna própria para a arte.
++                // A área do texto nunca participa das colisões/centralização dos círculos.
++                let origin = CGPoint(x: banner ? size.width * 0.78 - span / 2 : padding,
++                                     y: banner ? (height - span) / 2 : padding)
++                let centerOffset = banner ? CGPoint.zero : CGPoint(
++                    x: ((size.width - span) / 2 - padding) / scale,
++                    y: ((height - span) / 2 - padding + p.tilt.centerOffsetY) / scale
++                )
++                let localCursor = cursor.map { CGPoint(x: ($0.x - origin.x) / scale, y: ($0.y - origin.y) / scale) }
++                let footerEstimate = (1.05 * p.typography.titleSize + 2.5 * p.typography.descriptionSize + 0.018 * height).rounded() + 32
++                let fallHeight = max(0, height - 2 * padding - patternSize - footerEstimate) / scale
++                let targetOpacity = p.tilt.fadeOthers && dimPattern ? p.tilt.othersOpacity : 1
++                let frame = engine.frame(time: time, cursor: localCursor, centerOffset: centerOffset,
++                                         fallHeight: fallHeight, staticTarget: targetOpacity,
++                                         parameters: p, reducedMotion: reduceMotion)
++                var pattern = context
++                if banner {
++                    pattern.clip(to: Path(CGRect(x: size.width * 0.64, y: 0, width: size.width * 0.36, height: height)))
++                }
++                pattern.translateBy(x: origin.x, y: origin.y)
++                pattern.scaleBy(x: scale, y: scale)
++                draw(frame.dots, context: &pattern, color: colors.dots)
++                draw(frame.particles, context: &pattern, color: colors.dots)
++                if cursor != nil && !reduceMotion { drawShimmer(context: &context, size: canvasSize, elapsed: time - hoverStart) }
++            }
++        }
++        .allowsHitTesting(false)
++        .accessibilityHidden(true)
++    }
++
++    private func draw(_ dots: [PatternAnimationEngine.Dot], context: inout GraphicsContext, color: Color) {
++        for dot in dots {
++            if dot.solidRadius > 0.01 {
++                context.fill(Path(ellipseIn: rect(center: dot.center, radius: dot.solidRadius)),
++                             with: .color(color.opacity(dot.opacity)))
++            }
++            if dot.ringRadius > 0 {
++                context.stroke(Path(ellipseIn: rect(center: dot.center, radius: dot.ringRadius)),
++                               with: .color(color.opacity(dot.ringOpacity * dot.opacity)), lineWidth: dot.ringWidth)
++            }
++        }
++    }
++
++    private func drawHighlight(context: inout GraphicsContext, size: CGSize, colors: PatternColors) {
++        context.drawLayer { layer in
++            layer.addFilter(.blur(radius: 8))
++            let diameter = size.width * 1.45
++            layer.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
++                Gradient(stops: [.init(color: colors.glow.opacity(colors.glowOpacity), location: 0),
++                                 .init(color: colors.glow.opacity(colors.glowOpacity), location: 0.18),
++                                 .init(color: .clear, location: 0.65)]),
++                center: CGPoint(x: p.highlight.x * size.width, y: p.highlight.y * size.height),
++                startRadius: 0, endRadius: diameter / sqrt(2)
++            ))
++        }
++    }
++
++    private func drawShimmer(context: inout GraphicsContext, size: CGSize, elapsed: Double) {
++        guard p.shimmer.enabled else { return }
++        let width = size.width * p.shimmer.widthPct / 100
++        let tangent = tan(p.shimmer.angleDeg * .pi / 180)
++        let overshoot = size.height * abs(tangent)
++        let start = -width - overshoot
++        let distance = size.width + overshoot - start
++        let duration = distance / (size.width / max(1, p.shimmer.durationMs)) / 1000
++        let phase = elapsed.truncatingRemainder(dividingBy: duration + p.shimmer.loopDelayMs / 1000)
++        guard phase >= 0 && phase < duration else { return }
++        let t = phase / duration
++        let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
++        context.drawLayer { layer in
++            layer.blendMode = .screen
++            layer.opacity = p.shimmer.intensity
++            layer.addFilter(.blur(radius: p.shimmer.blurPx))
++            layer.concatenate(CGAffineTransform(a: 1, b: 0, c: -tangent, d: 1, tx: start + eased * distance, ty: -size.height / 2))
++            layer.fill(Path(CGRect(x: 0, y: 0, width: width, height: size.height * 2)), with: .linearGradient(
++                Gradient(stops: [.init(color: .clear, location: 0), .init(color: .white.opacity(0.08), location: 0.2),
++                                 .init(color: .white.opacity(0.35), location: 0.38), .init(color: .white.opacity(0.85), location: 0.5),
++                                 .init(color: .white.opacity(0.35), location: 0.62), .init(color: .white.opacity(0.08), location: 0.8),
++                                 .init(color: .clear, location: 1)]), startPoint: .zero, endPoint: CGPoint(x: width, y: 0)))
++        }
++    }
++
++    private func rect(center: CGPoint, radius: Double) -> CGRect {
++        CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
++    }
++}
+diff --git a/Sources/Views/Library/StudyRouteDestination.swift b/Sources/Views/Library/StudyRouteDestination.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/Views/Library/StudyRouteDestination.swift
+@@ -0,0 +1,21 @@
++import SwiftUI
++
++struct StudyRouteDestination: View {
++    let route: StudyRoute
++
++    var body: some View {
++        switch route {
++        case .library(let type):
++            LibraryView(initialType: type, embedded: true)
++        case .subject(let subject, let type):
++            SubjectDetailView(subject: subject, preferredType: type)
++        case .folder(let subject, let type, let status, let path):
++            FolderBrowserView(
++                subject: subject, type: type,
++                status: StudyStatusFilter(rawValue: status) ?? .all, path: path
++            )
++        case .item(let item):
++            StudyItemView(item: item)
++        }
++    }
++}
+diff --git a/Tests/KeychainInteractionTests.swift b/Tests/KeychainInteractionTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Tests/KeychainInteractionTests.swift
+@@ -0,0 +1,33 @@
++import XCTest
++import Security
++import GTMAppAuth
++
++final class KeychainInteractionTests: XCTestCase {
++    func testAutomaticAccessFailsInsteadOfOpeningPasswordPrompt() {
++        let helper = NoninteractiveKeychainHelper(keychainAttributes: [.useFileBasedKeychain])
++        let query = helper.keychainQuery(forService: "test-service")
++        XCTAssertEqual(query[kSecUseAuthenticationUI as String] as? String, kSecUseAuthenticationUIFail as String)
++        XCTAssertEqual(query[kSecAttrService as String] as? String, "test-service")
++        XCTAssertEqual(query[kSecAttrAccount as String] as? String, "OAuth")
++        XCTAssertEqual(query[kSecUseDataProtectionKeychain as String] as? Bool, false)
++        // O wrapper não instala ACLs permissivas nem transfere tokens para arquivos.
++        XCTAssertNil(query[kSecAttrAccess as String])
++        XCTAssertNil(query[kSecAttrAccessGroup as String])
++    }
++
++    func testLegacyInteractionFlagIsRestoredEvenWhenTheOperationThrows() throws {
++        enum ExpectedFailure: Error { case test }
++        let helper = NoninteractiveKeychainHelper(keychainAttributes: [.useFileBasedKeychain])
++        var before: DarwinBoolean = false
++        XCTAssertEqual(SecKeychainGetUserInteractionAllowed(&before), errSecSuccess)
++        XCTAssertThrowsError(try helper.withInteractionDisabled {
++            var during: DarwinBoolean = true
++            XCTAssertEqual(SecKeychainGetUserInteractionAllowed(&during), errSecSuccess)
++            XCTAssertFalse(during.boolValue)
++            throw ExpectedFailure.test
++        })
++        var after: DarwinBoolean = false
++        XCTAssertEqual(SecKeychainGetUserInteractionAllowed(&after), errSecSuccess)
++        XCTAssertEqual(after.boolValue, before.boolValue)
++    }
++}
+diff --git a/Tests/PatternAnimationTests.swift b/Tests/PatternAnimationTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Tests/PatternAnimationTests.swift
+@@ -0,0 +1,66 @@
++import XCTest
++import CoreGraphics
++
++final class PatternAnimationTests: XCTestCase {
++    private let p = PatternCardParameters.reference
++
++    func testAll51RequestedDefaultsMatchTheBundledJSON() throws {
++        #if SWIFT_PACKAGE
++        let bundle = Bundle.module
++        #else
++        let bundle = Bundle(for: Self.self)
++        #endif
++        let url = try XCTUnwrap(bundle.url(forResource: "PatternCards.defaults", withExtension: "json"))
++        let data = try Data(contentsOf: url)
++        XCTAssertEqual((try JSONSerialization.jsonObject(with: data) as? [String: Any])?.count, 51)
++        XCTAssertEqual(try PatternCardParameters(flatJSON: data), p)
++    }
++
++    func testPatternsKeepTheOriginalArrowCascadeAndPlusGeometry() {
++        let counts = [PatternCardVariant.a: 15, .b: 13, .c: 9]
++        for variant in PatternCardVariant.allCases {
++            let engine = PatternAnimationEngine(variant: variant)
++            let frame = engine.frame(time: 0, cursor: nil, centerOffset: .zero, fallHeight: 100,
++                                     staticTarget: 1, parameters: p, reducedMotion: true)
++            XCTAssertEqual(frame.dots.count, counts[variant])
++            XCTAssertTrue(frame.particles.isEmpty)
++            XCTAssertTrue(frame.dots.allSatisfy { $0.center.x > 0 && $0.center.x < 127 && $0.center.y > 0 && $0.center.y < 127 })
++        }
++    }
++
++    func testPointerEnlargesAndSeparatesDotsThenReturnsToGrid() {
++        let engine = PatternAnimationEngine(variant: .a, seed: 42)
++        let idle = engine.frame(time: 0, cursor: nil, centerOffset: .zero, fallHeight: 100, staticTarget: 1, parameters: p)
++        var hovered = idle
++        for step in 1...180 {
++            hovered = engine.frame(time: Double(step) / 60, cursor: CGPoint(x: 63.5, y: 63.5),
++                                   centerOffset: .zero, fallHeight: 100, staticTarget: 1, parameters: p)
++        }
++        XCTAssertGreaterThan(hovered.dots.map(\.ringRadius).max() ?? 0, (idle.dots.map(\.ringRadius).max() ?? 0) * 1.5)
++        XCTAssertTrue(zip(idle.dots, hovered.dots).contains { hypot($0.center.x - $1.center.x, $0.center.y - $1.center.y) > 2 })
++        var returned = hovered
++        for step in 181...480 {
++            returned = engine.frame(time: Double(step) / 60, cursor: nil, centerOffset: .zero,
++                                    fallHeight: 100, staticTarget: 1, parameters: p)
++        }
++        for (original, final) in zip(idle.dots, returned.dots) {
++            XCTAssertEqual(original.center.x, final.center.x, accuracy: 0.05)
++            XCTAssertEqual(original.center.y, final.center.y, accuracy: 0.05)
++            XCTAssertEqual(original.ringRadius, final.ringRadius, accuracy: 0.05)
++        }
++    }
++
++    func testParticleLifetimeBoundsMemoryAndOpacity() {
++        let engine = PatternAnimationEngine(variant: .a)
++        var foundParticles = false
++        for step in 0...1800 {
++            let frame = engine.frame(time: Double(step) / 60, cursor: nil, centerOffset: .zero,
++                                     fallHeight: 160, staticTarget: 1, parameters: p)
++            foundParticles = foundParticles || !frame.particles.isEmpty
++            XCTAssertLessThan(frame.particles.count, 25)
++            XCTAssertTrue(frame.particles.allSatisfy { $0.opacity >= 0 && $0.opacity <= p.particles.startOpacity })
++            XCTAssertTrue(frame.dots.allSatisfy { $0.center.x.isFinite && $0.center.y.isFinite })
++        }
++        XCTAssertTrue(foundParticles)
++    }
++}
+diff --git a/Tests/StudyNavigationTests.swift b/Tests/StudyNavigationTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Tests/StudyNavigationTests.swift
+@@ -0,0 +1,25 @@
++import XCTest
++
++final class StudyNavigationTests: XCTestCase {
++    func testHomeClearsSubjectAndEveryNestedFolder() {
++        let subject = Subject(id: "sus", title: "SUS", subtitle: "", icon: "cross", monogram: "S")
++        var navigation = StudyNavigationState(path: [
++            .library(type: nil), .subject(subject, type: nil),
++            .folder(subject, type: nil, status: "all", path: ["Bateria"]),
++            .folder(subject, type: nil, status: "all", path: ["Bateria", "Clínica"])
++        ])
++        navigation.returnHome()
++        XCTAssertTrue(navigation.path.isEmpty)
++        navigation.returnHome()
++        XCTAssertTrue(navigation.path.isEmpty)
++    }
++
++    func testHomeClearsAnOpenedStudyMaterial() {
++        let item = StudyItem(id: "1", title: "Aula", filename: "aula.mp4", subjectID: "sus",
++                             folderPath: ["Bateria"], type: .lesson, url: "", linkKind: .file,
++                             driveFileID: "id", note: "", source: "test")
++        var navigation = StudyNavigationState(path: [.item(item)])
++        navigation.returnHome()
++        XCTAssertTrue(navigation.path.isEmpty)
++    }
++}
+diff --git a/Resources/PatternCards.defaults.json b/Resources/PatternCards.defaults.json
+new file mode 100644
+--- /dev/null
++++ b/Resources/PatternCards.defaults.json
+@@ -0,0 +1,53 @@
++{
++  "typography.titleSize": 33,
++  "typography.titleWeight": 700,
++  "typography.descriptionSize": 17,
++  "typography.descriptionWeight": 200,
++  "highlight.x": 0.11,
++  "highlight.y": -0.09,
++  "card.height": 289.8,
++  "effect.scale": 0.76,
++  "animation.speed": 0.44,
++  "animation.phaseSpread": 2.25,
++  "animation.easing": 3,
++  "animation.fillBias": -0.34,
++  "particles.spawnRate": 0.6,
++  "particles.fallSpeed": 47,
++  "particles.jitter": 0.26,
++  "particles.lifetime": 1.7,
++  "particles.fadeStart": 0,
++  "particles.startOpacity": 0.28,
++  "patternA.size": 127,
++  "patternA.dotScale": 0.86,
++  "patternA.ringStrokeScale": 0.06,
++  "patternB.size": 127,
++  "patternB.dotScale": 0.86,
++  "patternB.ringStrokeScale": 0.06,
++  "patternC.size": 127,
++  "patternC.dotScale": 0.86,
++  "patternC.ringStrokeScale": 0.06,
++  "tilt.maxAngle": 0,
++  "tilt.randomness": 0.56,
++  "tilt.perspective": 520,
++  "tilt.scaleMax": 3.8,
++  "tilt.scaleRadius": 161,
++  "tilt.packIterations": 40,
++  "tilt.easing": 1.6,
++  "tilt.centerDurationMs": 420,
++  "tilt.centerStaggerMs": 320,
++  "tilt.centerOffsetY": -43,
++  "tilt.keepInGrid": false,
++  "tilt.pushSmoothingMs": 260,
++  "tilt.scaleSmoothingMs": 220,
++  "tilt.fadeOthers": true,
++  "tilt.othersOpacity": 0.12,
++  "shimmer.enabled": true,
++  "shimmer.intensity": 0.2,
++  "shimmer.widthPct": 162,
++  "shimmer.angleDeg": 38,
++  "shimmer.blurPx": 60,
++  "shimmer.durationMs": 320,
++  "shimmer.loopDelayMs": 8000,
++  "shimmer.color": "#ffffff",
++  "shimmer.blendMode": "screen"
++}
+diff --git a/Prototype/PatternCards.useDialKit.ts b/Prototype/PatternCards.useDialKit.ts
+new file mode 100644
+--- /dev/null
++++ b/Prototype/PatternCards.useDialKit.ts
+@@ -0,0 +1,98 @@
++"use client";
++
++import { useDialKit } from "dialkit";
++
++// Parâmetros da referência web, incluindo a redução posterior de 30% na altura.
++// No macOS, PatternCardParameters + PatternAnimationEngine reproduzem estes valores.
++export function usePatternCardParameters() {
++  return useDialKit("Pattern Cards", {
++  "typography": {
++    "titleSize": 33,
++    "titleWeight": 700,
++    "descriptionSize": 17,
++    "descriptionWeight": 200
++  },
++  "highlight": {
++    "x": 0.11,
++    "y": -0.09
++  },
++  "card": {
++    "height": 289.8
++  },
++  "effect": {
++    "scale": 0.76
++  },
++  "animation": {
++    "speed": 0.44,
++    "phaseSpread": 2.25,
++    "easing": 3,
++    "fillBias": -0.34
++  },
++  "particles": {
++    "spawnRate": 0.6,
++    "fallSpeed": 47,
++    "jitter": 0.26,
++    "lifetime": 1.7,
++    "fadeStart": 0,
++    "startOpacity": 0.28
++  },
++  "patternA": {
++    "size": 127,
++    "dotScale": 0.86,
++    "ringStrokeScale": 0.06
++  },
++  "patternB": {
++    "size": 127,
++    "dotScale": 0.86,
++    "ringStrokeScale": 0.06
++  },
++  "patternC": {
++    "size": 127,
++    "dotScale": 0.86,
++    "ringStrokeScale": 0.06
++  },
++  "tilt": {
++    "maxAngle": 0,
++    "randomness": 0.56,
++    "perspective": 520,
++    "scaleMax": 3.8,
++    "scaleRadius": 161,
++    "packIterations": 40,
++    "easing": 1.6,
++    "centerDurationMs": 420,
++    "centerStaggerMs": 320,
++    "centerOffsetY": -43,
++    "keepInGrid": false,
++    "pushSmoothingMs": 260,
++    "scaleSmoothingMs": 220,
++    "fadeOthers": true,
++    "othersOpacity": 0.12
++  },
++  "shimmer": {
++    "enabled": true,
++    "intensity": 0.2,
++    "widthPct": 162,
++    "angleDeg": 38,
++    "blurPx": 60,
++    "durationMs": 320,
++    "loopDelayMs": 8000,
++    "color": {
++      "type": "color",
++      "default": "#ffffff"
++    },
++    "blendMode": {
++      "type": "select",
++      "options": [
++        "overlay",
++        "screen",
++        "soft-light",
++        "plus-lighter",
++        "lighten",
++        "color-dodge",
++        "normal"
++      ],
++      "default": "screen"
++    }
++  }
++});
++}
