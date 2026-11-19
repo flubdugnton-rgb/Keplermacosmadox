@@ -1,0 +1,723 @@
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/App/RootView.swift Keplermacosmadox-main/src/Sources/App/RootView.swift
+--- orig_src_snapshot/Sources/App/RootView.swift	2026-11-19 20:16:58.839695326 +0000
++++ Keplermacosmadox-main/src/Sources/App/RootView.swift	2026-11-19 20:16:58.894541170 +0000
+@@ -114,6 +114,16 @@
+                 }
+                 .listStyle(.sidebar)
+ 
++                HStack {
++                    Label("Aparência", systemImage: "circle.lefthalf.filled")
++                        .font(.subheadline)
++                        .foregroundStyle(.secondary)
++                    Spacer(minLength: 8)
++                    ThemeToggleButton()
++                }
++                .padding(.horizontal, 20)
++                .padding(.vertical, 10)
++
+                 Divider()
+                     .padding(.horizontal, 16)
+ 
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Data/PomodoroStore.swift Keplermacosmadox-main/src/Sources/Data/PomodoroStore.swift
+--- orig_src_snapshot/Sources/Data/PomodoroStore.swift	2026-11-19 20:16:58.839917276 +0000
++++ Keplermacosmadox-main/src/Sources/Data/PomodoroStore.swift	2026-11-19 20:16:58.894773509 +0000
+@@ -12,6 +12,9 @@
+ 
+     private var timer: Timer?
+     private var deadline: Date?
++
++    /// Fim previsto da fase em andamento (nil quando pausado). O dial usa para animar o ponteiro com suavidade.
++    var phaseDeadline: Date? { running ? deadline : nil }
+     private let key = "keplerae.pomodoro.v1"
+ 
+     private struct Payload: Codable {
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Design/GlassThemeToggle.swift Keplermacosmadox-main/src/Sources/Design/GlassThemeToggle.swift
+--- orig_src_snapshot/Sources/Design/GlassThemeToggle.swift	1970-01-01 00:00:00.000000000 +0000
++++ Keplermacosmadox-main/src/Sources/Design/GlassThemeToggle.swift	2026-11-19 20:16:24.429010503 +0000
+@@ -0,0 +1,165 @@
++import Foundation
++import SwiftUI
++
++// MARK: - Botão pronto (lê/grava o tema existente e avisa a sincronização)
++
++/// Usa o mesmo `@AppStorage("appTheme")` do RootView e do Perfil, e chama
++/// `cloudSync.localDataDidChange()` como o Perfil faz, para o tema continuar sincronizando.
++struct ThemeToggleButton: View {
++    @AppStorage("appTheme") private var appThemeRaw = AppTheme.system.rawValue
++    @Environment(\.colorScheme) private var scheme
++    @EnvironmentObject private var cloudSync: CloudSyncService
++
++    private var theme: AppTheme { AppTheme(rawValue: appThemeRaw) ?? .system }
++
++    private var isDark: Bool {
++        theme == .dark || (theme == .system && scheme == .dark)
++    }
++
++    var body: some View {
++        GlassThemeToggle(
++            isDark: Binding(
++                get: { isDark },
++                set: { newValue in
++                    appThemeRaw = (newValue ? AppTheme.dark : AppTheme.light).rawValue
++                    cloudSync.localDataDidChange()
++                }
++            )
++        )
++        .contextMenu {
++            Button("Acompanhar o sistema", systemImage: "macbook.and.iphone") {
++                appThemeRaw = AppTheme.system.rawValue
++                cloudSync.localDataDidChange()
++            }
++        }
++        .help("Alternar tema claro/escuro (clique direito: acompanhar o sistema)")
++    }
++}
++
++// MARK: - Toggle de vidro (arrasta ou clica)
++
++struct GlassThemeToggle: View {
++    @Binding var isDark: Bool
++
++    private let trackW: CGFloat = 80
++    private let trackH: CGFloat = 40
++    private let knob: CGFloat = 32
++
++    /// posição do botão enquanto arrasta (nil = em repouso)
++    @State private var dragX: CGFloat?
++
++    private var pad: CGFloat { (trackH - knob) / 2 }
++    private var travel: CGFloat { trackW - knob - pad * 2 }
++    private var restingX: CGFloat { isDark ? travel : 0 }
++    private var knobX: CGFloat { dragX ?? restingX }
++    private var darkness: Double { Double(knobX / travel) }
++
++    var body: some View {
++        let night = dragX == nil ? isDark : darkness > 0.5
++
++        ZStack(alignment: .leading) {
++            // céu: dia -> noite acompanha o botão
++            Capsule()
++                .fill(Color(red: 0.55, green: 0.78, blue: 1.0).opacity(0.30 * (1 - darkness)))
++            Capsule()
++                .fill(Color(red: 0.10, green: 0.12, blue: 0.30).opacity(0.60 * darkness))
++
++            knobView(night: night)
++                .offset(x: pad + knobX)
++        }
++        .frame(width: trackW, height: trackH)
++        .glassEffect(.regular, in: Capsule())
++        // luz na borda
++        .overlay(
++            Capsule().strokeBorder(
++                LinearGradient(
++                    colors: [.white.opacity(0.75), .white.opacity(0.05), .white.opacity(0.35)],
++                    startPoint: .topLeading,
++                    endPoint: .bottomTrailing
++                ),
++                lineWidth: 1
++            )
++        )
++        .contentShape(Capsule())
++        .gesture(drag)
++        .onTapGesture {
++            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { isDark.toggle() }
++        }
++        .accessibilityElement()
++        .accessibilityLabel("Tema escuro")
++        .accessibilityValue(isDark ? "ligado" : "desligado")
++        .accessibilityAddTraits(.isButton)
++        .accessibilityAction { isDark.toggle() }
++    }
++
++    private var drag: some Gesture {
++        DragGesture(minimumDistance: 3)
++            .onChanged { value in
++                dragX = min(max(restingX + value.translation.width, 0), travel)
++            }
++            .onEnded { _ in
++                let end = dragX ?? restingX
++                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
++                    isDark = end > travel / 2
++                    dragX = nil
++                }
++            }
++    }
++
++    private func knobView(night: Bool) -> some View {
++        ZStack {
++            Circle().fill(night ? Color(white: 0.16) : Color.white)
++            Circle().strokeBorder(.white.opacity(night ? 0.18 : 0.9), lineWidth: 1)
++            PixelGlyph(night: night)
++        }
++        .frame(width: knob, height: knob)
++        .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
++        .animation(.smooth(duration: 0.3), value: night)
++    }
++}
++
++// MARK: - Ícone de pixels: a lua se reconstrói em sol
++
++private struct PixelGlyph: View {
++    let night: Bool
++
++    private let n = 9
++    private let step: CGFloat = 2.9
++    private let dot: CGFloat = 2.2
++
++    var body: some View {
++        ZStack {
++            ForEach(0..<(n * n), id: \.self) { i in
++                let x = i % n
++                let y = i / n
++                let on = night ? pixelIsMoon(x, y) : pixelIsSun(x, y)
++
++                Circle()
++                    .frame(width: dot, height: dot)
++                    .scaleEffect(on ? 1 : 0.01)
++                    // atraso pela diagonal: os pontos "se reorganizam" em onda
++                    .animation(
++                        .spring(response: 0.38, dampingFraction: 0.6).delay(Double(x + y) * 0.02),
++                        value: night
++                    )
++                    .position(x: (CGFloat(x) + 0.5) * step, y: (CGFloat(y) + 0.5) * step)
++            }
++        }
++        .frame(width: CGFloat(n) * step, height: CGFloat(n) * step)
++        .foregroundStyle(night ? Color.white : Color(red: 0.96, green: 0.56, blue: 0.12))
++    }
++}
++
++// grade 9x9, centro em (4, 4)
++private func pixelIsMoon(_ x: Int, _ y: Int) -> Bool {
++    let px = Double(x), py = Double(y)
++    let outer = hypot(px - 4, py - 4) <= 3.7
++    let cut = hypot(px - 5.9, py - 2.6) <= 3.1
++    return outer && !cut
++}
++
++private func pixelIsSun(_ x: Int, _ y: Int) -> Bool {
++    if hypot(Double(x) - 4, Double(y) - 4) <= 2.1 { return true }
++    let rays = [(4, 0), (4, 8), (0, 4), (8, 4), (1, 1), (7, 1), (1, 7), (7, 7)]
++    return rays.contains { $0.0 == x && $0.1 == y }
++}
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Design/KepleraePalette.swift Keplermacosmadox-main/src/Sources/Design/KepleraePalette.swift
+--- orig_src_snapshot/Sources/Design/KepleraePalette.swift	2026-11-19 20:16:58.839660273 +0000
++++ Keplermacosmadox-main/src/Sources/Design/KepleraePalette.swift	2026-11-19 20:16:58.893587295 +0000
+@@ -3,16 +3,17 @@
+ struct SubjectPalette {
+     let primary: Color
+     let secondary: Color
++    let pattern: DotPatternKind
+ 
+     static func forSubject(_ id: String) -> SubjectPalette {
+         switch id {
+-        case "fisioterapia": return .init(primary: .mint, secondary: .teal)
+-        case "portugues": return .init(primary: .pink, secondary: .purple)
+-        case "matematica": return .init(primary: .blue, secondary: .indigo)
+-        case "hu_legislacao": return .init(primary: .orange, secondary: .yellow)
+-        case "sus": return .init(primary: .green, secondary: .mint)
+-        case "profisio": return .init(primary: .purple, secondary: .indigo)
+-        default: return .init(primary: .blue, secondary: .cyan)
++        case "fisioterapia": return .init(primary: .mint, secondary: .teal, pattern: .wave)
++        case "portugues": return .init(primary: .pink, secondary: .purple, pattern: .grid)
++        case "matematica": return .init(primary: .blue, secondary: .indigo, pattern: .diagonal)
++        case "hu_legislacao": return .init(primary: .orange, secondary: .yellow, pattern: .radial)
++        case "sus": return .init(primary: .green, secondary: .mint, pattern: .scatter)
++        case "profisio": return .init(primary: .purple, secondary: .indigo, pattern: .wave)
++        default: return .init(primary: .blue, secondary: .cyan, pattern: .grid)
+         }
+     }
+ }
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Views/Components/DotPattern.swift Keplermacosmadox-main/src/Sources/Views/Components/DotPattern.swift
+--- orig_src_snapshot/Sources/Views/Components/DotPattern.swift	1970-01-01 00:00:00.000000000 +0000
++++ Keplermacosmadox-main/src/Sources/Views/Components/DotPattern.swift	2026-11-19 20:16:11.757010050 +0000
+@@ -0,0 +1,117 @@
++import Foundation
++import SwiftUI
++
++/// Padrões de pontos usados como arte dos cards de matéria.
++enum DotPatternKind: CaseIterable, Sendable {
++    case grid       // grade uniforme
++    case wave       // ondas de tamanho variável
++    case radial     // nasce do canto superior direito e se dissolve
++    case diagonal   // faixas diagonais
++    case scatter    // pontos espalhados (determinístico)
++}
++
++/// Desenha pontos em `Canvas` (sem imagens). Com `animated` os pontos pulsam em onda;
++/// a animação só roda enquanto `animated` é verdadeiro.
++struct DotPattern: View {
++    var kind: DotPatternKind
++    var color: Color
++    var spacing: CGFloat = 13
++    var animated = false
++
++    @State private var start: Date?
++
++    var body: some View {
++        let k = kind
++        let c = color
++        let s = spacing
++        let isAnimated = animated
++
++        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isAnimated)) { timeline in
++            let t = start.map { timeline.date.timeIntervalSince($0) * 1.6 } ?? 0
++
++            Canvas { ctx, size in
++                drawDots(into: &ctx, size: size, kind: k, color: c, spacing: s, pulse: isAnimated ? t : nil)
++            }
++        }
++        .onChange(of: animated) { _, isOn in
++            start = isOn ? .now : nil
++        }
++        .allowsHitTesting(false)
++        .accessibilityHidden(true)
++    }
++}
++
++// MARK: - Desenho (funções livres: o Canvas não precisa capturar a View)
++
++private func drawDots(
++    into ctx: inout GraphicsContext,
++    size: CGSize,
++    kind: DotPatternKind,
++    color: Color,
++    spacing: CGFloat,
++    pulse: Double?
++) {
++    let cols = Int(size.width / spacing) + 1
++    let rows = Int(size.height / spacing) + 1
++
++    for row in 0..<rows {
++        for col in 0..<cols {
++            let x = CGFloat(col) * spacing + spacing / 2
++            let y = CGFloat(row) * spacing + spacing / 2
++
++            var r = dotRadius(kind: kind, col: col, row: row, x: x, y: y, size: size)
++            if let t = pulse {
++                r *= 1 + 0.25 * CGFloat(sin(t * 2 + Double(col + row) * 0.35))
++            }
++            guard r > 0.25 else { continue }
++
++            let rect = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
++            ctx.fill(Path(ellipseIn: rect), with: .color(color))
++        }
++    }
++}
++
++private func dotRadius(kind: DotPatternKind, col: Int, row: Int, x: CGFloat, y: CGFloat, size: CGSize) -> CGFloat {
++    switch kind {
++    case .grid:
++        return 1.5
++    case .wave:
++        let s = sin(Double(x) / 26 + Double(y) / 17)
++        return CGFloat(0.6 + 1.9 * (0.5 + 0.5 * s))
++    case .radial:
++        let d = hypot(x - size.width, y) / max(size.width, 1)
++        return max(0, 2.8 - d * 3.4)
++    case .diagonal:
++        return (col + row) % 4 == 0 ? 2.2 : 0.8
++    case .scatter:
++        let h = dotHash(col, row)
++        return h > 0.5 ? CGFloat(h) * 2.4 : 0
++    }
++}
++
++private func dotHash(_ a: Int, _ b: Int) -> Double {
++    var h = UInt64(truncatingIfNeeded: a) &* 374_761_393 &+ UInt64(truncatingIfNeeded: b) &* 668_265_263
++    h = (h ^ (h >> 13)) &* 1_274_126_177
++    return Double((h ^ (h >> 16)) & 0xFFFF) / 65_535.0
++}
++
++// MARK: - Barra de progresso fina dos cards
++
++struct ThinProgressBar: View {
++    let value: Double
++    let tint: Color
++
++    var body: some View {
++        Capsule()
++            .fill(tint.opacity(0.18))
++            .overlay(alignment: .leading) {
++                GeometryReader { geo in
++                    let w = geo.size.width * min(max(value, 0), 1)
++                    Capsule()
++                        .fill(tint)
++                        .frame(width: value > 0 ? max(5, w) : 0)
++                }
++            }
++            .frame(height: 5)
++    }
++}
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Views/Home/HomeView.swift Keplermacosmadox-main/src/Sources/Views/Home/HomeView.swift
+--- orig_src_snapshot/Sources/Views/Home/HomeView.swift	2026-11-19 20:16:58.839953774 +0000
++++ Keplermacosmadox-main/src/Sources/Views/Home/HomeView.swift	2026-11-19 20:16:58.894197094 +0000
+@@ -10,6 +10,14 @@
+     private var intensity: Double { Double(glassIntensityPercent) / 100 }
+     private var completedCount: Int { studyState.completed.intersection(Set(catalog.items.map(\.id))).count }
+     private var progress: Double { catalog.items.isEmpty ? 0 : Double(completedCount) / Double(catalog.items.count) }
++    /// Concluídos por matéria, calculado uma vez por renderização.
++    private var completedBySubject: [String: Int] {
++        var result: [String: Int] = [:]
++        for item in catalog.items where studyState.completed.contains(item.id) {
++            result[item.subjectID, default: 0] += 1
++        }
++        return result
++    }
+     private var resumeItem: StudyItem? {
+         guard let id = studyState.lastOpenedID else { return catalog.items.first }
+         return catalog.items.first(where: { $0.id == id }) ?? catalog.items.first
+@@ -131,12 +139,18 @@
+                 }
+             }
+ 
++            let doneBySubject = completedBySubject
+             LazyVGrid(columns: [GridItem(.adaptive(minimum: 210, maximum: 340))], spacing: 14) {
+                 ForEach(catalog.subjects) { subject in
+                     NavigationLink {
+                         SubjectDetailView(subject: subject)
+                     } label: {
+-                        SubjectHomeCard(subject: subject, count: catalog.count(for: subject), intensity: intensity)
++                        SubjectHomeCard(
++                            subject: subject,
++                            count: catalog.count(for: subject),
++                            completed: doneBySubject[subject.id] ?? 0,
++                            intensity: intensity
++                        )
+                     }
+                     .buttonStyle(.plain)
+                 }
+@@ -200,10 +214,16 @@
+ private struct SubjectHomeCard: View {
+     let subject: Subject
+     let count: Int
++    let completed: Int
+     let intensity: Double
+ 
++    @State private var hovering = false
++
++    private var progress: Double { count == 0 ? 0 : Double(completed) / Double(count) }
++
+     var body: some View {
+         let palette = SubjectPalette.forSubject(subject.id)
++        let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+         VStack(alignment: .leading, spacing: 12) {
+             HStack {
+                 ZStack {
+@@ -214,22 +234,43 @@
+                 Image(systemName: "arrow.up.right")
+                     .font(.caption.bold())
+                     .foregroundStyle(.secondary)
++                    .offset(x: hovering ? 2 : 0, y: hovering ? -2 : 0)
+             }
+             Spacer(minLength: 2)
+             Text(subject.title)
+                 .font(.subheadline.weight(.bold))
+                 .lineLimit(2)
+                 .minimumScaleFactor(0.8)
+-            Text("\(count) materiais")
+-                .font(.caption)
+-                .foregroundStyle(.secondary)
++            HStack {
++                Text(count == 1 ? "1 material" : "\(count) materiais")
++                Spacer()
++                if completed > 0 {
++                    Text("\(Int(progress * 100))%").monospacedDigit()
++                }
++            }
++            .font(.caption)
++            .foregroundStyle(.secondary)
++
++            ThinProgressBar(value: progress, tint: palette.primary)
+         }
+-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
++        .frame(maxWidth: .infinity, minHeight: 156, alignment: .leading)
+         .padding(16)
++        // pontos por cima do degradê, esmaecendo para o canto oposto
++        .background {
++            DotPattern(kind: palette.pattern, color: palette.primary.opacity(0.5), animated: hovering)
++                .mask(
++                    LinearGradient(colors: [.black, .clear], startPoint: .topTrailing, endPoint: .bottomLeading)
++                )
++                .clipShape(shape)
++        }
+         .background(
+             LinearGradient(colors: [palette.primary.opacity(0.28), palette.secondary.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing),
+-            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
++            in: shape
+         )
+         .kepleraeGlass(intensity: intensity, cornerRadius: 26)
++        .scaleEffect(hovering ? 1.015 : 1)
++        .animation(.smooth(duration: 0.25), value: hovering)
++        .onHover { hovering = $0 }
++        .accessibilityElement(children: .combine)
+     }
+ }
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Views/Pomodoro/PomodoroDial.swift Keplermacosmadox-main/src/Sources/Views/Pomodoro/PomodoroDial.swift
+--- orig_src_snapshot/Sources/Views/Pomodoro/PomodoroDial.swift	1970-01-01 00:00:00.000000000 +0000
++++ Keplermacosmadox-main/src/Sources/Views/Pomodoro/PomodoroDial.swift	2026-11-19 20:16:42.385011145 +0000
+@@ -0,0 +1,231 @@
++import Foundation
++import SwiftUI
++
++// MARK: - Acabamentos (tokens de cor) por fase
++
++/// Cores de um "acabamento" do dial. Cada fase do Pomodoro usa um.
++struct DialFinish {
++    let surface: Color   // corpo do widget
++    let ink: Color       // textos e marcações
++    let accent: Color    // ponteiro, marcas percorridas
++    let shadow: Color    // sombra colorida
++
++    /// Foco: grafite com o roxo do app
++    static let graphite = DialFinish(
++        surface: Color(dialHex: 0x1E1E24),
++        ink: Color(dialHex: 0xF2F2F4),
++        accent: Color(dialHex: 0xB69CFF),
++        shadow: Color(dialHex: 0xB69CFF).opacity(0.28)
++    )
++
++    /// Pausa curta: porcelana com verde-água
++    static let porcelain = DialFinish(
++        surface: Color(dialHex: 0xF6F6F8),
++        ink: Color(dialHex: 0x2C2C2F),
++        accent: Color(dialHex: 0x1FA38A),
++        shadow: Color.black.opacity(0.16)
++    )
++
++    /// Pausa longa: azul profundo com azul-gelo
++    static let deepSea = DialFinish(
++        surface: Color(dialHex: 0x22395A),
++        ink: Color(dialHex: 0xE6F1FF),
++        accent: Color(dialHex: 0x8CCBFF),
++        shadow: Color(dialHex: 0x8CCBFF).opacity(0.24)
++    )
++}
++
++private extension Color {
++    init(dialHex hex: UInt32) {
++        self.init(
++            .sRGB,
++            red: Double((hex >> 16) & 0xFF) / 255,
++            green: Double((hex >> 8) & 0xFF) / 255,
++            blue: Double(hex & 0xFF) / 255,
++            opacity: 1
++        )
++    }
++}
++
++extension PomodoroPhase {
++    var finish: DialFinish {
++        switch self {
++        case .focus: return .graphite
++        case .shortBreak: return .porcelain
++        case .longBreak: return .deepSea
++        }
++    }
++}
++
++// MARK: - Widget do dial
++
++struct PomodoroDial: View {
++    @EnvironmentObject private var store: PomodoroStore
++
++    /// "2 de 4": foco em andamento conta o atual; pausas mostram quantos já foram concluídos.
++    private var cyclePosition: Int {
++        let position = store.phase == .focus ? store.cycle + 1 : store.cycle
++        return min(max(position, 1), max(store.settings.cycles, 1))
++    }
++
++    var body: some View {
++        let finish = store.phase.finish
++        let corner: CGFloat = 48
++
++        ZStack {
++            RoundedRectangle(cornerRadius: corner, style: .continuous)
++                .fill(finish.surface)
++                .overlay(
++                    RoundedRectangle(cornerRadius: corner, style: .continuous)
++                        .strokeBorder(
++                            LinearGradient(
++                                colors: [.white.opacity(0.32), .clear],
++                                startPoint: .top,
++                                endPoint: .bottom
++                            ),
++                            lineWidth: 1.2
++                        )
++                )
++                .shadow(color: finish.shadow, radius: 30, y: 18)
++
++            // 30 quadros/s só enquanto o timer roda; parado, desenha uma vez
++            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !store.running)) { timeline in
++                ZStack {
++                    DialFace(finish: finish, progress: progress(at: timeline.date))
++                        .padding(.horizontal, 30)
++                        .padding(.vertical, 74)
++
++                    VStack {
++                        pill(finish) {
++                            Text(timeString(store.remainingSeconds))
++                                .font(.system(size: 30, weight: .light, design: .rounded))
++                                .monospacedDigit()
++                                .contentTransition(.numericText(countsDown: true))
++                                .animation(.snappy, value: store.remainingSeconds)
++                        }
++                        Spacer()
++                        pill(finish) {
++                            Text("\(store.phase.title) · \(cyclePosition) de \(max(store.settings.cycles, 1))")
++                                .font(.system(size: 12, weight: .medium, design: .monospaced))
++                        }
++                    }
++                    .padding(.vertical, 20)
++                    .foregroundStyle(finish.ink)
++                }
++            }
++        }
++        .frame(width: 380, height: 400)
++        // todas as cores do acabamento interpolam quando a fase muda
++        .animation(.easeInOut(duration: 0.7), value: store.phase)
++        .accessibilityElement(children: .ignore)
++        .accessibilityLabel("Pomodoro, \(store.phase.title)")
++        .accessibilityValue("Restam \(timeString(store.remainingSeconds))")
++    }
++
++    /// Progresso suave (0...1) usando o fim previsto da fase; parado, usa os segundos restantes.
++    private func progress(at date: Date) -> Double {
++        let total = Double(max(1, store.settings.minutes(for: store.phase) * 60))
++        let remaining: Double
++        if store.running, let end = store.phaseDeadline {
++            remaining = max(0, end.timeIntervalSince(date))
++        } else {
++            remaining = Double(store.remainingSeconds)
++        }
++        return min(max(1 - remaining / total, 0), 1)
++    }
++
++    private func timeString(_ seconds: Int) -> String {
++        String(format: "%02d:%02d", seconds / 60, seconds % 60)
++    }
++
++    private func pill<Content: View>(_ f: DialFinish, @ViewBuilder _ content: () -> Content) -> some View {
++        content()
++            .padding(.horizontal, 20)
++            .padding(.vertical, 7)
++            .background(f.ink.opacity(0.08), in: Capsule())
++            .overlay(Capsule().strokeBorder(f.ink.opacity(0.10), lineWidth: 1))
++    }
++}
++
++// MARK: - Mostrador
++
++private struct DialFace: View {
++    let finish: DialFinish
++    let progress: Double
++
++    var body: some View {
++        let finish = self.finish
++        let progress = self.progress
++
++        GeometryReader { geo in
++            let size = min(geo.size.width, geo.size.height)
++            let r = size / 2
++
++            ZStack {
++                // 60 marcas; a cada 5 uma maior. As já percorridas acendem.
++                Canvas { ctx, canvasSize in
++                    let c = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
++                    let outer = r - 4
++
++                    func tick(_ i: Int) -> Path {
++                        let major = i % 5 == 0
++                        let a = Double(i) / 60 * 2 * .pi - .pi / 2
++                        let inner = outer - (major ? 14 : 7)
++                        var p = Path()
++                        p.move(to: dialPoint(c, a, inner))
++                        p.addLine(to: dialPoint(c, a, outer))
++                        return p
++                    }
++
++                    for i in 0..<60 {
++                        let major = i % 5 == 0
++                        let passed = progress > 0 && Double(i) / 60 <= progress
++                        let color: Color = passed
++                            ? finish.accent
++                            : finish.ink.opacity(major ? 0.55 : 0.28)
++                        ctx.stroke(
++                            tick(i),
++                            with: .color(color),
++                            style: StrokeStyle(lineWidth: major ? 2.4 : 1.2, lineCap: .round)
++                        )
++                    }
++
++                    // brilho nas marcas principais já percorridas
++                    ctx.drawLayer { layer in
++                        layer.addFilter(.shadow(color: finish.accent.opacity(0.9), radius: 5))
++                        for i in stride(from: 0, to: 60, by: 5) where progress > 0 && Double(i) / 60 <= progress {
++                            layer.stroke(
++                                tick(i),
++                                with: .color(finish.accent),
++                                style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
++                            )
++                        }
++                    }
++                }
++
++                // ponteiro de progresso: uma volta = a fase inteira
++                ZStack {
++                    Capsule()
++                        .fill(finish.accent)
++                        .frame(width: 4, height: r - 34)
++                        .offset(y: -(r - 34) / 2)
++                    Capsule()
++                        .fill(finish.ink.opacity(0.7))
++                        .frame(width: 4, height: 22)
++                        .offset(y: 11)
++                }
++                .rotationEffect(.degrees(progress * 360))
++
++                // eixo
++                Circle().fill(finish.surface).frame(width: 16, height: 16)
++                Circle().strokeBorder(finish.accent, lineWidth: 3).frame(width: 16, height: 16)
++            }
++            .frame(width: size, height: size)
++            .position(x: geo.size.width / 2, y: geo.size.height / 2)
++        }
++    }
++}
++
++private func dialPoint(_ c: CGPoint, _ angle: Double, _ radius: CGFloat) -> CGPoint {
++    CGPoint(x: c.x + CGFloat(cos(angle)) * radius, y: c.y + CGFloat(sin(angle)) * radius)
++}
+diff -ruN -x '*.png' -x '*.zip' orig_src_snapshot/Sources/Views/Pomodoro/PomodoroView.swift Keplermacosmadox-main/src/Sources/Views/Pomodoro/PomodoroView.swift
+--- orig_src_snapshot/Sources/Views/Pomodoro/PomodoroView.swift	2026-11-19 20:16:58.840112572 +0000
++++ Keplermacosmadox-main/src/Sources/Views/Pomodoro/PomodoroView.swift	2026-11-19 20:16:58.895064026 +0000
+@@ -74,17 +74,7 @@
+ 
+     private var focusView: some View {
+         VStack(spacing: 13) {
+-            AnimatedPomodoroArtwork(active: store.running && store.phase == .focus)
+-                .frame(height: 210)
+-
+-            Text(store.phase.title)
+-                .font(.title3.weight(.semibold))
+-                .foregroundStyle(.purple)
+-
+-            Text(timeString(store.remainingSeconds))
+-                .font(.system(size: 66, weight: .semibold, design: .rounded))
+-                .monospacedDigit()
+-                .contentTransition(.numericText())
++            PomodoroDial()
+ 
+             VStack(spacing: 4) {
+                 Text(store.running ? "Em andamento" : "Pronto para começar")
+@@ -95,10 +85,6 @@
+                     .foregroundStyle(.secondary)
+             }
+ 
+-            ProgressView(value: progress)
+-                .tint(.purple)
+-                .padding(.horizontal, 4)
+-
+             HStack(spacing: 22) {
+                 roundControl("arrow.counterclockwise", label: "Reiniciar ciclo", size: 50) {
+                     store.reset()
