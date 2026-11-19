@@ -1,0 +1,249 @@
+diff --git a/Sources/Design/GlassThemeToggle.swift b/Sources/Design/GlassThemeToggle.swift
+index c62dea4..f1320ac 100644
+--- a/Sources/Design/GlassThemeToggle.swift
++++ b/Sources/Design/GlassThemeToggle.swift
+@@ -45,17 +45,25 @@ struct GlassThemeToggle: View {
+     private let trackH: CGFloat = 40
+     private let knob: CGFloat = 32
+ 
+-    /// posição do botão enquanto arrasta (nil = em repouso)
+-    @State private var dragX: CGFloat?
++    private struct DragState {
++        let origin: CGFloat
++        let translation: CGFloat
++    }
++
++    // O estado do gesto também é limpo quando o arraste é cancelado.
++    @GestureState private var dragState: DragState?
+ 
+     private var pad: CGFloat { (trackH - knob) / 2 }
+     private var travel: CGFloat { trackW - knob - pad * 2 }
+     private var restingX: CGFloat { isDark ? travel : 0 }
+-    private var knobX: CGFloat { dragX ?? restingX }
+-    private var darkness: Double { Double(knobX / travel) }
++    private var knobX: CGFloat {
++        guard let dragState else { return restingX }
++        return min(max(dragState.origin + dragState.translation, 0), travel)
++    }
++    private var darkness: Double { min(max(Double(knobX / travel), 0), 1) }
+ 
+     var body: some View {
+-        let night = dragX == nil ? isDark : darkness > 0.5
++        let night = dragState == nil ? isDark : darkness > 0.5
+ 
+         ZStack(alignment: .leading) {
+             // céu: dia -> noite acompanha o botão
+@@ -63,12 +71,14 @@ struct GlassThemeToggle: View {
+                 .fill(Color(red: 0.55, green: 0.78, blue: 1.0).opacity(0.30 * (1 - darkness)))
+             Capsule()
+                 .fill(Color(red: 0.10, green: 0.12, blue: 0.30).opacity(0.60 * darkness))
+-
+-            knobView(night: night)
+-                .offset(x: pad + knobX)
+         }
+         .frame(width: trackW, height: trackH)
+         .glassEffect(.regular, in: Capsule())
++        // O botão fica acima do material, com tamanho e alinhamento estáveis.
++        .overlay(alignment: .leading) {
++            knobView(night: night)
++                .offset(x: pad + knobX)
++        }
+         // luz na borda
+         .overlay(
+             Capsule().strokeBorder(
+@@ -81,10 +91,9 @@ struct GlassThemeToggle: View {
+             )
+         )
+         .contentShape(Capsule())
+-        .gesture(drag)
+-        .onTapGesture {
+-            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { isDark.toggle() }
+-        }
++        // Anima apenas o controle; a troca do tema da janela não herda a animação.
++        .animation(dragState == nil ? .easeInOut(duration: 0.24) : nil, value: knobX)
++        .gesture(drag.exclusively(before: TapGesture().onEnded { isDark.toggle() }))
+         .accessibilityElement()
+         .accessibilityLabel("Tema escuro")
+         .accessibilityValue(isDark ? "ligado" : "desligado")
+@@ -94,15 +103,16 @@ struct GlassThemeToggle: View {
+ 
+     private var drag: some Gesture {
+         DragGesture(minimumDistance: 3)
+-            .onChanged { value in
+-                dragX = min(max(restingX + value.translation.width, 0), travel)
++            .updating($dragState) { value, state, _ in
++                state = DragState(
++                    origin: state?.origin ?? restingX,
++                    translation: value.translation.width
++                )
+             }
+-            .onEnded { _ in
+-                let end = dragX ?? restingX
+-                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+-                    isDark = end > travel / 2
+-                    dragX = nil
+-                }
++            .onEnded { value in
++                let origin = dragState?.origin ?? restingX
++                let end = min(max(origin + value.translation.width, 0), travel)
++                isDark = end > travel / 2
+             }
+     }
+ 
+diff --git a/Sources/Views/Profile/ProfileSettingsView.swift b/Sources/Views/Profile/ProfileSettingsView.swift
+index da82517..006249e 100644
+--- a/Sources/Views/Profile/ProfileSettingsView.swift
++++ b/Sources/Views/Profile/ProfileSettingsView.swift
+@@ -110,43 +110,6 @@ struct ProfileSettingsView: View {
+ 
+     private var appearanceSection: some View {
+         SettingsSection(title: "Aparência", icon: "circle.lefthalf.filled", intensity: intensity) {
+-            HStack(spacing: 12) {
+-                ThemeChoice(
+-                    title: "Claro",
+-                    kind: .sun,
+-                    tint: .orange,
+-                    selected: appThemeRaw == AppTheme.light.rawValue
+-                ) {
+-                    appThemeRaw = AppTheme.light.rawValue
+-                    cloudSync.localDataDidChange()
+-                }
+-
+-                ThemeChoice(
+-                    title: "Escuro",
+-                    kind: .moon,
+-                    tint: .green,
+-                    selected: appThemeRaw == AppTheme.dark.rawValue
+-                ) {
+-                    appThemeRaw = AppTheme.dark.rawValue
+-                    cloudSync.localDataDidChange()
+-                }
+-            }
+-
+-            Button {
+-                appThemeRaw = AppTheme.system.rawValue
+-                cloudSync.localDataDidChange()
+-            } label: {
+-                Label("Acompanhar o sistema", systemImage: "macbook.and.iphone")
+-                    .font(.subheadline.weight(.semibold))
+-                    .frame(maxWidth: .infinity)
+-                    .frame(height: 40)
+-            }
+-            .buttonStyle(.glass)
+-            .buttonBorderShape(.capsule)
+-            .tint(appThemeRaw == AppTheme.system.rawValue ? .cyan : .secondary)
+-
+-            Divider()
+-
+             HStack {
+                 Text("Liquid Glass").font(.headline)
+                 Spacer()
+@@ -337,108 +300,6 @@ struct ProfileSettingsView: View {
+     }
+ }
+ 
+-private enum ThemeArtKind {
+-    case sun, moon
+-}
+-
+-private struct ThemeChoice: View {
+-    let title: String
+-    let kind: ThemeArtKind
+-    let tint: Color
+-    let selected: Bool
+-    let action: () -> Void
+-    @State private var trigger = 0
+-
+-    var body: some View {
+-        Button {
+-            trigger += 1
+-            action()
+-        } label: {
+-            VStack(spacing: 10) {
+-                Group {
+-                    switch kind {
+-                    case .sun:
+-                        AnimatedSun(trigger: trigger, selected: selected)
+-                    case .moon:
+-                        AnimatedMoon(trigger: trigger, selected: selected)
+-                    }
+-                }
+-                .frame(width: 64, height: 64)
+-
+-                Text(title)
+-                    .font(.subheadline.weight(.semibold))
+-            }
+-            .frame(maxWidth: .infinity, minHeight: 116)
+-        }
+-        .buttonStyle(.plain)
+-        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+-        .overlay(
+-            RoundedRectangle(cornerRadius: 24)
+-                .stroke(selected ? tint.opacity(0.82) : Color.secondary.opacity(0.16), lineWidth: selected ? 2 : 1)
+-        )
+-    }
+-}
+-
+-private struct AnimatedSun: View {
+-    let trigger: Int
+-    let selected: Bool
+-    @State private var rotation = 0.0
+-    @State private var pulse = false
+-
+-    var body: some View {
+-        ZStack {
+-            ForEach(0..<8, id: \.self) { index in
+-                Capsule()
+-                    .fill(Color.orange)
+-                    .frame(width: 5, height: 14)
+-                    .offset(y: -27)
+-                    .rotationEffect(.degrees(Double(index) * 45 + rotation))
+-            }
+-
+-            Circle()
+-                .fill(Color.orange)
+-                .frame(width: 34, height: 34)
+-                .shadow(color: .orange.opacity(selected ? 0.35 : 0.12), radius: selected ? 9 : 3)
+-                .scaleEffect(pulse ? 1.06 : 0.96)
+-        }
+-        .onChange(of: trigger) { _, _ in
+-            withAnimation(.spring(response: 0.48, dampingFraction: 0.68)) {
+-                rotation += 28
+-                pulse.toggle()
+-            }
+-        }
+-    }
+-}
+-
+-private struct AnimatedMoon: View {
+-    let trigger: Int
+-    let selected: Bool
+-    @State private var sparkleScale = 0.8
+-    @State private var sparkleRotation = 0.0
+-
+-    var body: some View {
+-        ZStack {
+-            Image(systemName: "moon.fill")
+-                .font(.system(size: 48, weight: .medium))
+-                .foregroundStyle(.green)
+-                .shadow(color: .green.opacity(selected ? 0.28 : 0.10), radius: selected ? 8 : 3)
+-
+-            Image(systemName: "sparkle")
+-                .font(.system(size: 18, weight: .bold))
+-                .foregroundStyle(.mint)
+-                .offset(x: 19, y: -18)
+-                .scaleEffect(sparkleScale)
+-                .rotationEffect(.degrees(sparkleRotation))
+-        }
+-        .onChange(of: trigger) { _, _ in
+-            withAnimation(.spring(response: 0.42, dampingFraction: 0.58)) {
+-                sparkleScale = sparkleScale > 1 ? 0.8 : 1.35
+-                sparkleRotation += 45
+-            }
+-        }
+-    }
+-}
+-
+ private struct SettingsSection<Content: View>: View {
+     let title: String
+     let icon: String
