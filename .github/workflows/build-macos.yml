@@ -1,4 +1,4 @@
-name: Compilar Kepleræ macOS 2.0
+name: Compilar Kepleræ macOS
 
 on:
   push:
@@ -69,10 +69,10 @@ jobs:
       - name: Disponibilizar aplicativo e instalador
         uses: actions/upload-artifact@v4
         with:
-          name: Keplerae-macOS-2.0-universal
+          name: Keplerae-macOS-universal
           path: |
-            dist/Keplerae-macOS-2.0.zip
-            dist/Keplerae-macOS-2.0.dmg
+            dist/Keplerae-macOS-*.zip
+            dist/Keplerae-macOS-*.dmg
             dist/SHA256SUMS.txt
             build/macOS-launch.png
           if-no-files-found: error
