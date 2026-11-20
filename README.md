@@ -1,10 +1,12 @@
-# Kepleræ macOS 2.0.1
+# Kepleræ macOS 2.0.2
 
 Aplicativo nativo para macOS 26 ou superior, com interface SwiftUI e Liquid Glass. A compilação gera um aplicativo universal para Apple Silicon e Intel, um ZIP e um instalador DMG.
 
-## Versão 2.0.1 (build 21)
+## Versão 2.0.2 (build 22)
 
-Corrige o movimento dos ponteiros do Pomodoro usando o tempo decorrido e ângulos contínuos, inclusive na virada do minuto. O visor continua em contagem regressiva. Remove o painel externo indicado na referência e oferece os acabamentos Porcelana, Grafite, Argila, Azul profundo e Sinal.
+- Vídeos e áudios usam streaming autenticado por trechos de até 256 KiB, com buffer curto em memória e sem cópia completa local. Não há fallback de download; respostas de arquivo completo são recusadas. O player cancela as requisições ao sair da aula e renova o token quando necessário. PDFs mantêm seu cache de documentos; caches antigos de vídeo/áudio são removidos na manutenção automática.
+- O login só é concluído depois de salvar e reler a sessão no Chaves. Ao abrir, a identidade salva é restaurada antes de consultar a rede, sem descartar a conta por erros temporários de conexão/perfil. Caso uma atualização ad hoc precise de autorização para acessar a credencial anterior, "Continuar com a conta salva" solicita esse acesso ao macOS sem repetir o login Google. Sair explicitamente impede restauração automática mesmo se o Chaves estiver bloqueado.
+- Os demais cards usam o mesmo motor de círculos, contornos, partículas e brilho dos cards iniciais, mantendo texto e controles utilizáveis. As animações respeitam movimento reduzido, visibilidade e estado ativo da janela. O relógio do Pomodoro mantém o ajuste da versão 2.0.1, sem painel externo.
 
 ## Recursos
 
@@ -22,7 +24,7 @@ Corrige o movimento dos ponteiros do Pomodoro usando o tempo decorrido e ângulo
 
 O workflow **Compilar Kepleræ macOS** executa ao enviar alterações para `main` ou manualmente em **Actions → Run workflow**. Ele valida os recursos, executa os testes de compatibilidade do schema, compila as duas arquiteturas, verifica a abertura do aplicativo e disponibiliza o artefato **Keplerae-macOS-universal**.
 
-O artefato contém `Keplerae-macOS-2.0.1.dmg`, `Keplerae-macOS-2.0.1.zip`, os hashes SHA-256 e uma captura da abertura no runner. Abra o DMG e arraste Keplerae para Aplicativos.
+O artefato contém `Keplerae-macOS-2.0.2.dmg`, `Keplerae-macOS-2.0.2.zip`, os hashes SHA-256 e uma captura da abertura no runner. Abra o DMG e arraste Keplerae para Aplicativos.
 
 Se você recebeu os fontes em ZIP, há duas maneiras de enviar ao repositório:
 
@@ -31,7 +33,7 @@ Se você recebeu os fontes em ZIP, há duas maneiras de enviar ao repositório:
 
 ### Login Google e assinatura Apple
 
-O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. O aplicativo não abre pedidos automáticos de senha do Chaves: consultas e gravações são não interativas e mantêm as ACLs existentes. Se uma atualização ad hoc não tiver acesso à credencial protegida por outra assinatura, será necessário entrar novamente no Google. Se o Chaves também impedir a gravação, a sessão funciona apenas até fechar o app e o Perfil informa essa condição. Para preservar a identidade entre atualizações, distribua builds assinadas com o mesmo certificado Developer ID.
+O login usa o fluxo oficial público do Google com AppAuth: navegador do sistema, PKCE, validação do retorno e atualização dos tokens. GTMAppAuth guarda as credenciais no Chaves local do Mac (`useFileBasedKeychain`), com controle de acesso por aplicativo. O login não depende de assinatura Apple paga nem de grupos restritos do Chaves. Consultas automáticas não abrem diálogos do Chaves. As ações explícitas de entrar, continuar uma sessão salva ou autorizar o armazenamento podem pedir a autorização normal do macOS. As ACLs existentes são preservadas e nenhum token é gravado em JSON, UserDefaults ou arquivo de texto. Um novo login não é aceito como persistente se a gravação ou a leitura de confirmação falhar. Para preservar a identidade entre atualizações sem nova autorização, distribua builds assinadas com o mesmo certificado Developer ID.
 
 Sem certificado configurado, o workflow gera um **build de teste com assinatura ad hoc**, sem notarização. Para distribuição com assinatura Developer ID Application, configure estes **Secrets** do repositório:
 
