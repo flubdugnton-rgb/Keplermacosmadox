@@ -1,6 +1,14 @@
-# Kepleræ macOS 2.0.2
+# Kepleræ macOS 2.0.3
 
 Aplicativo nativo para macOS 26 ou superior, com interface SwiftUI e Liquid Glass. A compilação gera um aplicativo universal para Apple Silicon e Intel, um ZIP e um instalador DMG.
+
+## Versão 2.0.3 (build 23)
+
+- Seletor de tema nativo de três posições (Claro, Sistema e Escuro), com arraste, pixels animados, brilho, teclado e movimento reduzido. A barra lateral mostra somente o seletor.
+- Progresso e retomada do estudo lado a lado no topo da página inicial; cards de notas, métricas e histórico de questões compactos. Dez cores de notas sem texto no seletor.
+- Caderno de erros com matéria, origem, localização, enunciado, resposta marcada, gabarito, explicação, motivo e agenda de revisão. Incluído no salvamento local, backup e sincronização, mantendo compatibilidade com backups antigos.
+- Substituição de todos os áudios antigos pelos dois WAVs fornecidos: relógio durante o foco e alarme ao concluir o ciclo. Mudo silencia ambos e fica ao lado de saltar. Sem menu de som abaixo do play.
+- Perfil sem ajuste de intensidade do Liquid Glass. Login com o logo do app centralizado, robô animado e apenas o botão com o ícone do Google. O botão usa a autenticação existente e restaura a sessão salva quando disponível.
 
 ## Versão 2.0.2 (build 22)
 
@@ -24,7 +32,7 @@ Aplicativo nativo para macOS 26 ou superior, com interface SwiftUI e Liquid Glas
 
 O workflow **Compilar Kepleræ macOS** executa ao enviar alterações para `main` ou manualmente em **Actions → Run workflow**. Ele valida os recursos, executa os testes de compatibilidade do schema, compila as duas arquiteturas, verifica a abertura do aplicativo e disponibiliza o artefato **Keplerae-macOS-universal**.
 
-O artefato contém `Keplerae-macOS-2.0.2.dmg`, `Keplerae-macOS-2.0.2.zip`, os hashes SHA-256 e uma captura da abertura no runner. Abra o DMG e arraste Keplerae para Aplicativos.
+O artefato contém `Keplerae-macOS-2.0.3.dmg`, `Keplerae-macOS-2.0.3.zip`, os hashes SHA-256 e uma captura da abertura no runner. Abra o DMG e arraste Keplerae para Aplicativos.
 
 Se você recebeu os fontes em ZIP, há duas maneiras de enviar ao repositório:
 
