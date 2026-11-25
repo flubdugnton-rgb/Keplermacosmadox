@@ -1,6 +1,12 @@
-# Kepleræ macOS 2.0.4
+# Kepleræ macOS 2.0.5
 
 Aplicativo nativo para macOS 26 ou superior, com interface SwiftUI e Liquid Glass. A compilação gera um aplicativo universal para Apple Silicon e Intel, um ZIP e um instalador DMG.
+
+## Versão 2.0.5 (build 25)
+
+- Player recebe blocos de até 256 KiB diretamente em memória, com cancelamento por requisição. Inicia quando há um trecho reproduzível, sem esperar a previsão de carregamento de toda a aula. Mantém pausa, saltos, retomada de buffer, renovação do token e recusa de respostas de arquivo completo.
+- O botão Google abre o login no navegador. A restauração automática continua silenciosa; quando a credencial de uma versão antiga está inacessível, um novo login salva e verifica uma nova entrada no Chaves antes de adotá-la. Tokens e ACLs continuam protegidos pelo macOS.
+- Teste de integração com AVPlayer verifica avanço real do tempo, pausa, retomada após seek e encerramento do player. Testes adicionais cobrem cancelamento de rede e troca da localização da credencial somente após salvamento confirmado.
 
 ## Versão 2.0.4 (build 24)
 
@@ -36,7 +42,7 @@ Aplicativo nativo para macOS 26 ou superior, com interface SwiftUI e Liquid Glas
 
 O workflow **Compilar Kepleræ macOS** executa ao enviar alterações para `main` ou manualmente em **Actions → Run workflow**. Ele valida os recursos, executa os testes de compatibilidade do schema, compila as duas arquiteturas, verifica a abertura do aplicativo e disponibiliza o artefato **Keplerae-macOS-universal**.
 
-O artefato contém `Keplerae-macOS-2.0.4.dmg`, `Keplerae-macOS-2.0.4.zip`, os hashes SHA-256 e uma captura da abertura no runner. Abra o DMG e arraste Keplerae para Aplicativos.
+O artefato contém `Keplerae-macOS-2.0.5.dmg`, `Keplerae-macOS-2.0.5.zip`, os hashes SHA-256 e uma captura da abertura no runner. Abra o DMG e arraste Keplerae para Aplicativos.
 
 Se você recebeu os fontes em ZIP, há duas maneiras de enviar ao repositório:
 
